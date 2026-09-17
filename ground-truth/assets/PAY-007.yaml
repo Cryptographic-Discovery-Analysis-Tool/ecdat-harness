@@ -1,0 +1,29 @@
+# harness §7.2 row PAY-007. Two suites, two quantum tiers -- planted
+# directly by targets/payments/edge-lb/haproxy.cfg's cipher list:
+# ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES256-GCM-SHA384.
+id: PAY-007
+tier: A
+domain: payments
+application: edge-lb
+planted_truth:
+  suites:
+    - { algorithm: AES-128-GCM, purpose: bulk-encryption, quantum_tier: grover-weakened }
+    - { algorithm: AES-256-GCM, purpose: bulk-encryption, quantum_tier: not-affected }
+  primitive: ae
+  security_function: true
+  reachable: true
+  provider: null
+locations:
+  - surface: tls
+    path: "edge-lb:8443"
+expected_observation:
+  must_be:
+    - "both suites KNOWN (observed on the wire)"
+declared_context:
+  business_criticality: critical
+  data_class: null
+  data_lifetime_years: 7
+  exposure: external
+  environment: prod
+migration: null
+misuse_note: null

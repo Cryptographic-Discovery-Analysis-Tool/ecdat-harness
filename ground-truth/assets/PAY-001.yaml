@@ -1,0 +1,42 @@
+# harness §7.1 (verbatim example) / §7.2 row PAY-001.
+id: PAY-001
+tier: A
+domain: payments
+application: payment-gateway
+planted_truth:
+  algorithm_family: RSA
+  algorithm: RSA-OAEP
+  parameters: { key_bits: 2048, oaep_hash: SHA-256, mgf1_hash: provider-dependent }
+  # SunJCE (default in harness): MGF1 uses SHA-1 when no OAEPParameterSpec is passed.
+  # Bouncy Castle / Conscrypt: MGF1 uses SHA-256. The transformation string does NOT fix MGF1.
+  primitive: pke                    # CycloneDX 1.6 enum (VERIFY against canonical schema)
+  crypto_functions: [encrypt, decrypt]
+  purpose: key-transport
+  security_function: true
+  reachable: true
+  provider: SunJCE
+  quantum_tier: shor-broken
+locations:
+  - surface: source
+    path: payments/payment-gateway/src/main/java/com/meridian/pay/crypto/KeyWrapService.java
+    lines: [1, 22]
+  - surface: configuration
+    path: payments/payment-gateway/src/main/resources/application.yml
+    key: pay.keywrap.transformation
+expected_observation:
+  governed_by: CFG-001
+  state_matrix: section-14.3          # states A-H (H added by harness §14.6 W1)
+  must_not:
+    - "algorithm state KNOWN from source alone"
+    - "merge with gateway-p12 certificate asset (PAY-004)"
+declared_context:
+  business_criticality: critical
+  data_class: payment-card
+  data_lifetime_years: 7
+  exposure: internal
+  environment: prod
+migration:
+  estimated_migration_years: 3
+  constraints: [hsm-backed-kek-planned, pci-scope]
+  oracle_ref: REC-PAY-001
+misuse_note: null

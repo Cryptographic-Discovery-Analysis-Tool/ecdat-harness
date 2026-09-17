@@ -1,0 +1,34 @@
+# harness §7.3, subset requested for the 2026-09-17 Tier A task
+# (TRAP-01, TRAP-03, TRAP-07, TRAP-09). Other traps (02/04/05/06/08/10) are
+# out of scope for this task and not planted yet.
+
+- id: TRAP-01
+  location: payments/payment-gateway/src/main/java/com/meridian/pay/crypto/LegacyCardHash.java
+  content: "MD5, unreachable class (no caller anywhere in this fixture)"
+  correct_behaviour:
+    - "finding allowed (the call site itself is real)"
+    - "reachable: UNKNOWN or false"
+    - "must NOT appear in the risk queue as 'in use'"
+
+- id: TRAP-03
+  location: targets/customer/customer-portal/docs/SECURITY.md
+  content: "the words 'RSA', '3DES' in prose"
+  correct_behaviour:
+    - "no finding at all"
+  status: "NOT YET PLANTED -- docs/SECURITY.md is still an empty stub (out of Tier A/payments scope for this task); this entry documents the expected rule, not a verified fixture"
+
+- id: TRAP-07
+  location: targets/controls/no-crypto-service/
+  content: "zero crypto (app.py has no crypto imports or crypto-shaped strings; verified by grep, see harness/eval/experiments.md)"
+  correct_behaviour:
+    - "zero crypto assets"
+    - "AND a coverage entry confirming the target was scanned (silence != scanned) -- harness §7.3: reporting 'zero assets' alone is a failure"
+
+- id: TRAP-09
+  location:
+    - targets/payments/payment-gateway/keystore/gateway.p12
+    - targets/infrastructure/k8s/secrets/pay-tls-secret.yaml
+  content: "real (throwaway) key material -- PKCS12 keystore and a base64 EC private key in a k8s Secret"
+  correct_behaviour:
+    - "no PEM/key bytes (raw or base64) in DB, UI, CBOM, or logs"
+    - "location + fingerprint only (Directive 10)"

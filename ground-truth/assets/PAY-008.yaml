@@ -1,0 +1,31 @@
+# harness §7.2 row PAY-008. Planted by
+# targets/payments/payment-gateway/pom.xml's org.bouncycastle:bcprov-jdk18on
+# dependency -- no source file imports org.bouncycastle (capability only).
+id: PAY-008
+tier: A
+domain: payments
+application: payment-gateway
+planted_truth:
+  package: bcprov-jdk18on
+  version: "1.86"
+  purpose: capability
+  security_function: null   # capability, not a usage -- has no security function of its own
+  reachable: null           # not applicable to a declared-but-unused dependency
+  quantum_tier: null        # not scored -- capability only, per harness §7.2 "Q: --"
+locations:
+  - surface: dependency
+    path: payments/payment-gateway/pom.xml
+    key: org.bouncycastle:bcprov-jdk18on
+expected_observation:
+  must_be:
+    - "capability only, no algorithm usage asset (harness §7.2: 'capability only, no algorithm usage')"
+  must_not:
+    - "any algorithm-usage finding attributed to Bouncy Castle (no source references org.bouncycastle)"
+declared_context:
+  business_criticality: medium
+  data_class: null
+  data_lifetime_years: null
+  exposure: internal
+  environment: prod
+migration: null
+misuse_note: null

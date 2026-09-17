@@ -1,0 +1,31 @@
+# harness §7.2 row INF-017 / §5.7 / TRAP-09.
+id: INF-017
+tier: A
+domain: infrastructure
+application: k8s
+planted_truth:
+  role: pay-edge   # reuses the pay-edge private key -- see generate-pki.sh
+  algorithm_family: ECDSA
+  algorithm: ECDSA-P256
+  purpose: tls-key
+  security_function: true
+  reachable: true
+  provider: null
+  quantum_tier: shor-broken
+locations:
+  - surface: configuration
+    path: targets/infrastructure/k8s/secrets/pay-tls-secret.yaml
+    key: data.tls.key
+expected_observation:
+  must_be:
+    - "finding KNOWN: private key material present, at this location"
+  must_not:
+    - "the actual key bytes (base64 or PEM) appearing anywhere in DB, UI, CBOM, or logs (Directive 10, TRAP-09) -- location + fingerprint only"
+declared_context:
+  business_criticality: critical
+  data_class: null
+  data_lifetime_years: null
+  exposure: internal
+  environment: prod
+migration: null
+misuse_note: null

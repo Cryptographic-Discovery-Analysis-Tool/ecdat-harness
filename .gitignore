@@ -1,7 +1,18 @@
 harness/build/pki-lock.generated.json
+harness/build/out/
 targets/infrastructure/pki/*
 !targets/infrastructure/pki/.gitkeep
 targets/payments/payment-gateway/keystore/*
 !targets/payments/payment-gateway/keystore/.gitkeep
+targets/payments/edge-lb/certs/
+targets/infrastructure/k8s/secrets/pay-tls-secret.yaml
 holdout/*
 !holdout/.gitkeep
+
+# score.py / CFG-R1 runtime validation outputs -- not ground truth, regenerated
+harness/eval/out/
+targets/payments/payment-gateway/target/
+targets/payments/payment-gateway/*.log
+
+__pycache__/
+*.pyc

@@ -1,0 +1,34 @@
+# H6 (harness §1): "All live endpoints run on an internal Docker network
+# with no egress. The only authorised TLS/SSH targets are harness
+# containers." Tier A scope only: payment-gateway + edge-lb.
+#
+# Not run in this environment (no Docker daemon available here -- see
+# ecdat/docs/open-issues.md OI-007). Syntax has been checked with
+# `docker compose config` equivalents only insofar as PyYAML can parse it;
+# it has not been built or started.
+name: ecdat-harness-tier-a
+
+networks:
+  payments-internal:
+    internal: true   # H6: no egress
+
+services:
+  payment-gateway:
+    build:
+      context: ../../targets/payments/payment-gateway
+    networks:
+      - payments-internal
+    # No published ports -- only reachable via edge-lb inside the internal
+    # network (harness §5.3: "plaintext behind the LB").
+
+  edge-lb:
+    build:
+      context: ../../targets/payments/edge-lb
+    networks:
+      - payments-internal
+    ports:
+      - "8443:8443"
+    volumes:
+      - ../../targets/payments/edge-lb/certs:/etc/haproxy/certs:ro
+    depends_on:
+      - payment-gateway

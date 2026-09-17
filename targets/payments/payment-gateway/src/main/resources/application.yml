@@ -1,0 +1,8 @@
+# harness §5.1 (verbatim): PAY-001's config-driven algorithm binding.
+pay:
+  keywrap:
+    transformation: "RSA/ECB/OAEPWithSHA-256AndMGF1Padding"
+server:
+  ssl:
+    key-store: classpath:keystore/gateway.p12
+    key-store-type: PKCS12

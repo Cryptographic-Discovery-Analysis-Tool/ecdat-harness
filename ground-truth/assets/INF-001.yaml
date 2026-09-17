@@ -1,0 +1,30 @@
+# harness §7.2 row INF-001 / §6 role `root-ca`.
+id: INF-001
+tier: A
+domain: infrastructure
+application: pki
+planted_truth:
+  role: root-ca
+  algorithm_family: RSA
+  algorithm: RSA
+  parameters: { key_bits: 4096 }
+  primitive: signature
+  purpose: ca-signing
+  security_function: true
+  reachable: true
+  provider: null
+  quantum_tier: shor-broken
+locations:
+  - surface: artifact
+    path: targets/infrastructure/pki/root-ca/cert.pem   # generated at build time, never committed (H3)
+expected_observation:
+  must_be:
+    - "algorithm KNOWN (certificate file)"
+declared_context:
+  business_criticality: critical
+  data_class: null
+  data_lifetime_years: 20
+  exposure: internal
+  environment: prod
+migration: null
+misuse_note: null

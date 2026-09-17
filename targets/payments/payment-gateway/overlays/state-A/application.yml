@@ -1,0 +1,7 @@
+# harness §14.3 state A: source only, no yml value for pay.keywrap.transformation.
+# Overlays this over src/main/resources/application.yml (base fixture state B)
+# for the CFG-R1 runtime validation of state A only.
+server:
+  ssl:
+    key-store: classpath:keystore/gateway.p12
+    key-store-type: PKCS12

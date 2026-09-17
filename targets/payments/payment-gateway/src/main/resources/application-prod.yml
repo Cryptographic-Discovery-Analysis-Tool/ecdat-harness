@@ -1,0 +1,6 @@
+# harness §14.3 state D: application-prod.yml = PKCS1 (A3: must be a
+# runtime-valid asymmetric transformation, since WRAP_MODE wraps with a
+# PublicKey -- same family/tier as OAEP (RSA, Shor), different padding).
+pay:
+  keywrap:
+    transformation: "RSA/ECB/PKCS1Padding"

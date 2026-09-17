@@ -1,0 +1,62 @@
+# harness §7.4 (excerpt): payments/PKI-relevant edges only, for the
+# 2026-09-17 Tier A task's PAY-001..008/INF-001/INF-017 scope. Each edge
+# carries the expected evidence_basis and epistemic_state (TOPO-001 / T1).
+# assurance is shown only for artifact_asserted edges. Forbidden edges are
+# marked forbidden: true and are hard failures if ECDAT emits them
+# (harness §7.4: "score as a correlation failure regardless of other
+# results"; score.py's forbidden-edge check reads this field).
+
+- from: payment-gateway (repo)
+  type: declares-dependency
+  to: bcprov (PAY-008)
+  evidence_basis: observed
+  epistemic_state: KNOWN
+  note: "pom.xml content"
+
+- from: edge-lb
+  type: terminates-tls-for
+  to: payment-gateway
+  evidence_basis: config_declared
+  epistemic_state: DECLARED
+  note: "haproxy.cfg backend -- never observed (harness §5.3)"
+
+- from: "edge-lb endpoint :8443"
+  type: presents
+  to: pay-edge cert (PAY-005)
+  evidence_basis: observed
+  epistemic_state: KNOWN
+  note: "wire, T7 scope"
+
+- from: pay-edge
+  type: issued-by
+  to: int-ca-ecc
+  evidence_basis: observed
+  epistemic_state: KNOWN
+  note: "chain signature verified"
+
+- from: int-ca-ecc
+  type: issued-by
+  to: root-ca
+  evidence_basis: observed
+  epistemic_state: KNOWN
+  note: "chain signature verified"
+
+- from: "KeyWrapService call site"
+  type: configured-by
+  to: "application.yml key (pay.keywrap.transformation)"
+  evidence_basis: inferred
+  epistemic_state: INFERRED
+  rule_id_required: true
+  note: "CFG-001"
+
+- from: "PAY-001 RSA key (source)"
+  type: same-object / shares-public-key
+  to: "PAY-004 RSA key (keystore)"
+  forbidden: true
+  note: "different keys; no content identity (harness §7.4 Part-5 over-merge test)"
+
+- from: "PAY-004 (app keystore)"
+  type: serves / presents
+  to: "edge-lb endpoint"
+  forbidden: true
+  note: "LB serves pay-edge (PAY-005), a different cert (harness §7.4 Part-5 over-merge test)"

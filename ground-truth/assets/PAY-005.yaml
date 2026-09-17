@@ -1,0 +1,32 @@
+# harness §7.2 row PAY-005 / §6 role `pay-edge` / §5.3.
+id: PAY-005
+tier: A
+domain: payments
+application: edge-lb
+planted_truth:
+  role: pay-edge
+  algorithm_family: ECDSA
+  algorithm: ECDSA-P256
+  parameters: { curve: P-256 }
+  primitive: signature
+  purpose: server-auth
+  security_function: true
+  reachable: true
+  provider: null
+  quantum_tier: shor-broken
+locations:
+  - surface: tls
+    path: "edge-lb:8443"
+expected_observation:
+  must_be:
+    - "algorithm KNOWN (observed on the wire, T7 scope: requested host/port/SNI/probe_vantage)"
+  must_not:
+    - "merged with PAY-004 (gateway.p12) -- different keys, harness §5.3 Part 5 over-merge test"
+declared_context:
+  business_criticality: critical
+  data_class: null
+  data_lifetime_years: 7
+  exposure: external
+  environment: prod
+migration: null
+misuse_note: null

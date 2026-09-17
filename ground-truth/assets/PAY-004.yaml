@@ -1,0 +1,36 @@
+# harness §7.2 row PAY-004 / §6 role `gateway-p12`.
+# Referenced by ROLE, not fingerprint (H3) -- score.py joins to the real
+# fingerprint/serial through harness/build/pki-lock.generated.json.
+id: PAY-004
+tier: A
+domain: payments
+application: payment-gateway
+planted_truth:
+  role: gateway-p12   # harness/build/pki-lock.generated.json key
+  algorithm_family: RSA
+  algorithm: RSA
+  parameters: { key_bits: 2048 }
+  primitive: signature   # cert used for TLS server auth in-app
+  purpose: tls-server-auth-in-app
+  security_function: true
+  reachable: true
+  provider: null
+  quantum_tier: shor-broken
+locations:
+  - surface: artifact
+    path: payments/payment-gateway/keystore/gateway.p12
+expected_observation:
+  must_be:
+    - "algorithm KNOWN (keystore contents)"
+    - "purpose derived from keyUsage/EKU (digitalSignature, keyEncipherment / serverAuth), not guessed"
+  must_not:
+    - "same-object or shares-public-key edge to PAY-001's RSA key (harness §7.4: MUST NOT EXIST)"
+    - "serves/presents edge to the edge-lb endpoint (harness §7.4: MUST NOT EXIST -- the LB serves pay-edge, not gateway-p12)"
+declared_context:
+  business_criticality: critical
+  data_class: null
+  data_lifetime_years: 7
+  exposure: internal
+  environment: prod
+migration: null
+misuse_note: null

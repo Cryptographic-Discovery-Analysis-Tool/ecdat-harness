@@ -1,0 +1,31 @@
+# harness §7.2 row PAY-003.
+id: PAY-003
+tier: A
+domain: payments
+application: payment-gateway
+planted_truth:
+  algorithm_family: AES
+  algorithm: AES-256-GCM
+  parameters: { key_bits: 256 }
+  primitive: ae
+  crypto_functions: [encrypt, decrypt]
+  purpose: tokenisation
+  security_function: true
+  reachable: true
+  provider: SunJCE
+  quantum_tier: not-affected
+locations:
+  - surface: source
+    path: payments/payment-gateway/src/main/java/com/meridian/pay/crypto/TokenVault.java
+    lines: [1, 21]
+expected_observation:
+  must_be:
+    - "algorithm KNOWN (literal Cipher.getInstance(\"AES/GCM/NoPadding\") + 256-bit key)"
+declared_context:
+  business_criticality: critical
+  data_class: null
+  data_lifetime_years: 7
+  exposure: internal
+  environment: prod
+migration: null
+misuse_note: null

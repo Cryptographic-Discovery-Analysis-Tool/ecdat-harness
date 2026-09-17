@@ -1,0 +1,29 @@
+# harness §7.2 row PAY-006.
+id: PAY-006
+tier: A
+domain: payments
+application: edge-lb
+planted_truth:
+  algorithm_family: ECDHE
+  algorithm: ECDHE
+  parameters: { groups: [P-256, X25519] }
+  primitive: key-agreement
+  purpose: key-agreement
+  security_function: true
+  reachable: true
+  provider: null
+  quantum_tier: shor-broken
+locations:
+  - surface: tls
+    path: "edge-lb:8443"
+expected_observation:
+  must_be:
+    - "groups as actually offered on the wire (KNOWN), not assumed from haproxy.cfg config alone"
+declared_context:
+  business_criticality: critical
+  data_class: null
+  data_lifetime_years: 7
+  exposure: external
+  environment: prod
+migration: null
+misuse_note: null

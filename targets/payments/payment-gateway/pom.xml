@@ -1,0 +1,60 @@
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <parent>
+    <groupId>org.springframework.boot</groupId>
+    <artifactId>spring-boot-starter-parent</artifactId>
+    <!-- No harness-pinned Spring Boot version exists yet (see
+         docs/open-issues.md OI-002-style gap). Using the latest stable
+         release per Maven Central metadata at fetch time (2026-09-17),
+         verified by curl against repo1.maven.org, not typed from memory. -->
+    <version>4.1.1</version>
+    <relativePath/>
+  </parent>
+
+  <groupId>com.meridian</groupId>
+  <artifactId>payment-gateway</artifactId>
+  <version>0.0.1-SNAPSHOT</version>
+  <name>payment-gateway</name>
+  <description>Harness fixture: PAY-001..008, TRAP-01 (harness Tier A)</description>
+
+  <properties>
+    <java.version>21</java.version>
+  </properties>
+
+  <dependencies>
+    <!-- No spring-boot-starter-web: CFG-R1 validation only needs config
+         binding + a CommandLineRunner that logs the bound value and exits;
+         no HTTP server required. -->
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-starter</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.springframework.boot</groupId>
+      <artifactId>spring-boot-configuration-processor</artifactId>
+      <optional>true</optional>
+    </dependency>
+    <!-- PAY-008 (harness §7.2): capability only, no algorithm usage.
+         Dependency is declared but no class in this fixture imports
+         org.bouncycastle. Version pinned to the latest release per Maven
+         Central metadata at fetch time (2026-09-17), same jar used earlier
+         in ecdat/experiments/PRV-T1-oaep-provider/. -->
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcprov-jdk18on</artifactId>
+      <version>1.86</version>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-maven-plugin</artifactId>
+      </plugin>
+    </plugins>
+  </build>
+</project>
