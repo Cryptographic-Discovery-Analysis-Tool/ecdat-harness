@@ -1,0 +1,7 @@
+harness/build/pki-lock.generated.json
+targets/infrastructure/pki/*
+!targets/infrastructure/pki/.gitkeep
+targets/payments/payment-gateway/keystore/*
+!targets/payments/payment-gateway/keystore/.gitkeep
+holdout/*
+!holdout/.gitkeep
