@@ -24,6 +24,12 @@ expected_observation:
     - "algorithm KNOWN (literal Mac.getInstance(\"HmacSHA256\"))"
   must_not:
     - "purpose KNOWN from Semgrep alone -- MAC => integrity is INFERENCE, not observation (harness §7.2)"
+  # Machine-readable encoding of the prose above (harness §8.2 scoring).
+  field_states:
+    source:
+      algorithm: KNOWN          # must_be "algorithm KNOWN (literal Mac.getInstance(...))"
+      purpose: UNKNOWN          # must_not "purpose KNOWN from Semgrep alone"
+      reachable: UNKNOWN        # Lock §7 OQ-5: no reachability analysis
 declared_context:
   business_criticality: high
   data_class: null   # not specified in harness §7.2 for PAY-002

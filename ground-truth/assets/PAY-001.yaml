@@ -29,6 +29,16 @@ expected_observation:
   must_not:
     - "algorithm state KNOWN from source alone"
     - "merge with gateway-p12 certificate asset (PAY-004)"
+  # Machine-readable encoding of the prose above, per surface, for scoring
+  # (harness §8.2 false-certainty rate). Nothing here adds an expectation the
+  # prose does not already state; each entry cites the line it encodes.
+  field_states:
+    source:
+      algorithm: UNKNOWN        # must_not "algorithm state KNOWN from source alone";
+                                # INFERRED only once the config chain is resolved (CFG-001)
+      purpose: UNKNOWN          # §7.1 note: WRAP_MODE -> key-transport is an inference,
+                                # scored as INFERRED-or-UNKNOWN, never KNOWN
+      reachable: UNKNOWN        # Lock §7 OQ-5: no reachability analysis
 declared_context:
   business_criticality: critical
   data_class: payment-card

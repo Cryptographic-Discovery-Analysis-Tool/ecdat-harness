@@ -21,6 +21,19 @@ locations:
 expected_observation:
   must_be:
     - "algorithm KNOWN (literal Cipher.getInstance(\"AES/GCM/NoPadding\") + 256-bit key)"
+  # Machine-readable encoding of the prose above (harness §8.2 scoring).
+  field_states:
+    source:
+      algorithm: KNOWN          # must_be "algorithm KNOWN (literal Cipher.getInstance(...))"
+      # The "+ 256-bit key" half of that line is NOT observable on the source
+      # surface: TokenVault.java takes the key as the method parameter
+      # `byte[] key256` and SecretKeySpec carries no length, so 256 appears only
+      # inside an identifier. Reading an identifier as a measurement is the
+      # false-certainty failure §8.2 scores. Expected UNKNOWN here; a keystore
+      # or runtime surface may observe it later.
+      key_bits: UNKNOWN
+      purpose: UNKNOWN          # not derivable from the call site alone (cf. PAY-002 must_not)
+      reachable: UNKNOWN        # Lock §7 OQ-5: no reachability analysis
 declared_context:
   business_criticality: critical
   data_class: null
