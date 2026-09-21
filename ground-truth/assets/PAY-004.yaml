@@ -19,10 +19,42 @@ planted_truth:
 locations:
   - surface: artifact
     path: payments/payment-gateway/keystore/gateway.p12
+    pki_role: gateway-p12
+  # The same certificate as it leaves generate-pki.sh, before it is packed into
+  # the keystore above. Recorded so a run over harness/build/out is scored on
+  # the same asset. Join is by ROLE, never by fingerprint (H3).
+  - surface: artifact
+    path: harness/build/out/gateway-p12/cert.pem
+    pki_role: gateway-p12
 expected_observation:
   must_be:
     - "algorithm KNOWN (keystore contents)"
     - "purpose derived from keyUsage/EKU (digitalSignature, keyEncipherment / serverAuth), not guessed"
+  # Machine-readable encoding of the prose above (harness §8.2). Direct
+  # artefact read, so what the certificate carries is KNOWN. `purpose` is
+  # deliberately absent: the must_be line says it is DERIVED from keyUsage/EKU,
+  # i.e. an inference, and no adapter in this run reports it -- adding an
+  # expectation for a field nothing emits would be inventing a metric.
+  # public_key_curve and subject_alt_names are not carried by this certificate
+  # (RSA key; no SAN extension), so a reported value would be fabricated.
+  field_states:
+    artifact:
+      der_sha256: KNOWN
+      spki_sha256: KNOWN
+      subject: KNOWN
+      issuer: KNOWN
+      serial_number: KNOWN
+      not_before: KNOWN
+      not_after: KNOWN
+      public_key_algorithm: KNOWN
+      public_key_size: KNOWN
+      public_key_curve: UNKNOWN        # RSA key -- no curve exists to observe
+      signature_algorithm: KNOWN
+      key_usage: KNOWN
+      extended_key_usage: KNOWN        # serverAuth is present on this certificate
+      subject_alt_names: UNKNOWN       # no SAN extension on this certificate
+      is_ca: KNOWN
+      source_format: KNOWN
   must_not:
     - "same-object or shares-public-key edge to PAY-001's RSA key (harness §7.4: MUST NOT EXIST)"
     - "serves/presents edge to the edge-lb endpoint (harness §7.4: MUST NOT EXIST -- the LB serves pay-edge, not gateway-p12)"

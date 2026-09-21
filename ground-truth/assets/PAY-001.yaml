@@ -39,6 +39,22 @@ expected_observation:
       purpose: UNKNOWN          # §7.1 note: WRAP_MODE -> key-transport is an inference,
                                 # scored as INFERRED-or-UNKNOWN, never KNOWN
       reachable: UNKNOWN        # Lock §7 OQ-5: no reachability analysis
+    configuration:
+      # CFG-001 / state matrix §14.3: application.yml and application-prod.yml
+      # both set pay.keywrap.transformation to different values, and nothing
+      # statically visible says which profile is active. The effective value is
+      # therefore not determinable from configuration alone -- reporting one is
+      # the over-claim §8.2 scores, whichever of the two is picked.
+      resolved_value: UNKNOWN
+      source_kind: UNKNOWN            # which file wins is exactly what is undecided
+      source_location: UNKNOWN
+      # Facts about the resolution attempt itself, not about the property. The
+      # scanner does know which files it read and which rule it applied, and
+      # §8.2's "silence != scanned" requires it to say so.
+      rule_applied: KNOWN
+      sources_inspected: KNOWN
+      higher_precedence_not_inspected: KNOWN
+      losing_candidates: KNOWN
 declared_context:
   business_criticality: critical
   data_class: payment-card

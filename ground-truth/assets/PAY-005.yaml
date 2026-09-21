@@ -17,11 +17,42 @@ planted_truth:
 locations:
   - surface: tls
     path: "edge-lb:8443"
+  # The same key/cert as it exists on disk, before haproxy ever serves it.
+  # This is a DIFFERENT surface from the wire observation above and is scored
+  # separately: reading the file proves the certificate exists, never that it
+  # is the certificate the load balancer presents. Join is by ROLE (H3).
+  - surface: artifact
+    path: targets/payments/edge-lb/certs/pay-edge.pem
+    pki_role: pay-edge
+  - surface: artifact
+    path: harness/build/out/pay-edge/cert.pem
+    pki_role: pay-edge
 expected_observation:
   must_be:
     - "algorithm KNOWN (observed on the wire, T7 scope: requested host/port/SNI/probe_vantage)"
   must_not:
     - "merged with PAY-004 (gateway.p12) -- different keys, harness §5.3 Part 5 over-merge test"
+  # Machine-readable encoding, per surface (harness §8.2). The `tls` surface
+  # has no entry on purpose: nothing in this run observes the wire, and writing
+  # expectations for an unobserved surface would manufacture a score.
+  field_states:
+    artifact:
+      der_sha256: KNOWN
+      spki_sha256: KNOWN
+      subject: KNOWN
+      issuer: KNOWN
+      serial_number: KNOWN
+      not_before: KNOWN
+      not_after: KNOWN
+      public_key_algorithm: KNOWN
+      public_key_size: KNOWN
+      public_key_curve: KNOWN          # EC key -- the curve is in the SPKI
+      signature_algorithm: KNOWN
+      key_usage: KNOWN
+      extended_key_usage: KNOWN        # serverAuth is present on this certificate
+      subject_alt_names: KNOWN         # DNS:pay-edge is present on this certificate
+      is_ca: KNOWN
+      source_format: KNOWN
 declared_context:
   business_criticality: critical
   data_class: null
