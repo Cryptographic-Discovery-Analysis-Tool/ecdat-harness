@@ -66,6 +66,7 @@ Not domain code -- harness eval tooling only.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -79,7 +80,14 @@ PKI_LOCK = HARNESS_ROOT / "harness" / "build" / "pki-lock.generated.json"
 
 sys.path.insert(0, str(EVAL_DIR))
 from ecdat_convert import MalformedRunDocumentError, load_run_document  # noqa: E402
-from score_run import score_run, verify_metric_is_live, _self_check, _print_report  # noqa: E402
+from score_run import (  # noqa: E402
+    score_run,
+    score_correlation,
+    verify_metric_is_live,
+    _self_check,
+    _print_report,
+    _pki_roles,
+)
 
 
 def _ecdat_repo() -> Path:
@@ -131,6 +139,42 @@ def _run_ecdat_scan(ecdat_repo: Path, adapter: str, argv: list[str], out_path: P
         ) from exc
 
 
+def _run_ecdat_correlate(ecdat_repo: Path, plan_path: Path, out_path: Path) -> dict[str, Any]:
+    """Invoke `python -m ecdat.cli correlate --plan <plan> --out <out>` as a
+    real subprocess, same pattern as `_run_ecdat_scan`: never imported,
+    always driven exactly the way an external caller would."""
+    cmd = [sys.executable, "-m", "ecdat.cli", "correlate", "--plan", str(plan_path), "--out", str(out_path)]
+    result = subprocess.run(cmd, cwd=str(ecdat_repo), capture_output=True, text=True, timeout=120)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"ecdat correlate failed (exit {result.returncode}):\n"
+            f"cmd: {' '.join(cmd)}\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+    print(result.stdout.strip())
+    return json.loads(out_path.read_text(encoding="utf-8"))
+
+
+def _print_correlation_report(report: dict[str, Any]) -> None:
+    print("\n=== combined correlate run: forbidden-edge check (harness §7.4) ===")
+    print(f"same-object relationships checked : {report['identity_relationships_checked']}")
+    print(f"asset ids resolved to a PKI role  : {len(report['asset_roles_resolved'])}")
+    for asset_id, role in sorted(report["asset_roles_resolved"].items()):
+        print(f"    {asset_id} -> {role}")
+    if report["violations"]:
+        print(f"    FORBIDDEN EDGE(S) FOUND: {len(report['violations'])}")
+        for v in report["violations"]:
+            print(f"    VIOLATION {v['source_role']} <-> {v['target_role']}: {v['forbidden_rule']}")
+    else:
+        print("forbidden-edge violations         : 0 (checked for real, see roles above)")
+    for edge in report["unresolved_edges"]:
+        print(
+            f"    unresolved same-object edge {edge['source_entity']} <-> "
+            f"{edge['target_entity']}: {edge['reason']}"
+        )
+    for note in report["not_exercised"]:
+        print(f"    NOT EXERCISED: {note}")
+
+
 def _check_pki_lock(allow_missing: bool) -> None:
     """§3 of this task: a missing pki-lock.generated.json must be a loud,
     non-zero-exit failure -- not the silent NOTE score_run.py prints on its
@@ -170,6 +214,15 @@ def main(argv: list[str] | None = None) -> int:
         help="do not fail if harness/eval/out/ already has content from a previous run "
         "(it is always overwritten either way; this flag only silences the notice)",
     )
+    parser.add_argument(
+        "--combined",
+        action="store_true",
+        help="also run `ecdat correlate` over a plan combining every adapter below into one "
+        "process, and score the result's same-object relationships against "
+        "ground-truth/relationships.yaml's forbidden pairs (harness §7.4). Off by default: "
+        "this is a genuinely different kind of run (correlate, not scan) from the five "
+        "per-adapter runs above, and this task explicitly asked for it to be separate.",
+    )
     args = parser.parse_args(argv)
 
     _check_pki_lock(args.allow_missing_pki)
@@ -195,6 +248,25 @@ def main(argv: list[str] | None = None) -> int:
         / "tests" / "fixtures" / "recorded" / "semgrep" / "1.99.0" / "ecdat-rules"
         / "tier-a-java.raw.json"
     )
+    # Recorded for real against THIS harness's own edge-lb TLS endpoint
+    # (openssl s_server standing in for haproxy, presenting the real
+    # generate-pki.sh pay-edge.pem -- see
+    # ecdat/tests/fixtures/recorded/sslyze/6.2.0/README.md, "Target: Tier A
+    # edge-lb TLS endpoint"). Replay, per CLAUDE.md's "Replay of a recorded
+    # file (--input) is for tests and scoring only".
+    sslyze_fixture = (
+        ecdat_repo / "tests" / "fixtures" / "recorded" / "sslyze" / "6.2.0" / "tier_a_edge_lb.raw.json"
+    )
+    # Recorded for real against THIS harness's own built payment-gateway fat
+    # jar (`trivy rootfs --scanners vuln --list-all-pkgs` -- see
+    # ecdat/tests/fixtures/recorded/trivy/0.74.0/README.md, "Target: Tier A
+    # (payment-gateway, ...)"). Contains org.bouncycastle:bcprov-jdk18on
+    # 1.86, PAY-008's planted dependency.
+    trivy_fixture = (
+        ecdat_repo
+        / "tests" / "fixtures" / "recorded" / "trivy" / "0.74.0"
+        / "e1_supplemental_payment-gateway-fatjar.raw.json"
+    )
 
     if not keystore.is_file():
         print(
@@ -206,6 +278,20 @@ def main(argv: list[str] | None = None) -> int:
     if not semgrep_fixture.is_file():
         print(
             f"FATAL: recorded semgrep fixture is missing at {semgrep_fixture} -- this "
+            "ecdat checkout may be stale or incomplete.",
+            file=sys.stderr,
+        )
+        return 1
+    if not sslyze_fixture.is_file():
+        print(
+            f"FATAL: recorded sslyze fixture is missing at {sslyze_fixture} -- this "
+            "ecdat checkout may be stale or incomplete.",
+            file=sys.stderr,
+        )
+        return 1
+    if not trivy_fixture.is_file():
+        print(
+            f"FATAL: recorded trivy fixture is missing at {trivy_fixture} -- this "
             "ecdat checkout may be stale or incomplete.",
             file=sys.stderr,
         )
@@ -237,6 +323,35 @@ def main(argv: list[str] | None = None) -> int:
         OUT_DIR / "config-chain-spring.run.json",
     )
 
+    print(
+        "\n=== tls-endpoint (replay of a real sslyze 6.2.0 run against this harness's own "
+        "edge-lb TLS endpoint) ==="
+    )
+    runs["tls-endpoint"] = _run_ecdat_scan(
+        ecdat_repo,
+        "tls-endpoint",
+        [
+            "--sslyze-input", str(sslyze_fixture),
+            "--host", "edge-lb",
+            "--port", "8443",
+            "--sni", "pay-edge",
+            "--vantage", "harness-eval-replay",
+            "--consent",
+        ],
+        OUT_DIR / "tls-endpoint.run.json",
+    )
+
+    print(
+        "\n=== packages-trivy (replay of a real trivy 0.74.0 rootfs run against this "
+        "harness's own built payment-gateway fat jar) ==="
+    )
+    runs["packages-trivy"] = _run_ecdat_scan(
+        ecdat_repo,
+        "packages-trivy",
+        ["--input", str(trivy_fixture)],
+        OUT_DIR / "packages-trivy.run.json",
+    )
+
     overall_ok = True
     for name, run in runs.items():
         report = score_run(run)
@@ -250,6 +365,70 @@ def main(argv: list[str] | None = None) -> int:
         message, ok = _self_check(report, verify_metric_is_live(run))
         print(message)
         overall_ok = overall_ok and ok
+
+    if args.combined:
+        plan = [
+            {
+                "adapter": "source-semgrep",
+                "target_id": "payment-gateway:source-semgrep",
+                "confidence": 0.9,
+                "confidence_justification": "harness eval run_ecdat.py --combined",
+                "input": str(semgrep_fixture),
+            },
+            {
+                "adapter": "certs-x509",
+                "target_id": "payment-gateway:certs-x509",
+                "confidence": 0.9,
+                "confidence_justification": "harness eval run_ecdat.py --combined",
+                "input": str(keystore),
+                "keystore_password": "changeit",
+            },
+            {
+                "adapter": "config-chain-spring",
+                "target_id": "payment-gateway:config-chain-spring",
+                "confidence": 0.9,
+                "confidence_justification": "harness eval run_ecdat.py --combined",
+                "input": str(payment_gateway),
+                "property_key": ["pay.keywrap.transformation"],
+            },
+            {
+                "adapter": "tls-endpoint",
+                "target_id": "payment-gateway:tls-endpoint",
+                "confidence": 0.9,
+                "confidence_justification": "harness eval run_ecdat.py --combined",
+                "sslyze_input": str(sslyze_fixture),
+                "host": "edge-lb",
+                "port": 8443,
+                "sni": "pay-edge",
+                "vantage": "harness-eval-replay",
+                "consent": True,
+            },
+            {
+                "adapter": "packages-trivy",
+                "target_id": "payment-gateway:packages-trivy",
+                "confidence": 0.9,
+                "confidence_justification": "harness eval run_ecdat.py --combined",
+                "input": str(trivy_fixture),
+            },
+        ]
+        plan_path = OUT_DIR / "combined.plan.json"
+        plan_path.write_text(json.dumps(plan, indent=2), encoding="utf-8")
+
+        print(
+            "\n=== ecdat correlate (all 5 adapters above, one process -- harness §7.4 "
+            "forbidden-edge check) ==="
+        )
+        try:
+            correlate_doc = _run_ecdat_correlate(ecdat_repo, plan_path, OUT_DIR / "combined.correlate.json")
+        except RuntimeError as exc:
+            print(f"FATAL: {exc}", file=sys.stderr)
+            return 1
+
+        roles = _pki_roles()
+        correlation_report = score_correlation(correlate_doc, roles)
+        _print_correlation_report(correlation_report)
+        if correlation_report["violations"]:
+            overall_ok = False
 
     print(f"\nrun documents written to {OUT_DIR}")
     return 0 if overall_ok else 1

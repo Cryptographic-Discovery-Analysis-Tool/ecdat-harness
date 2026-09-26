@@ -45,7 +45,29 @@ must show that gap, not a misleading 50% blend.
 
 Reads `forbidden: true` entries from `ground-truth/relationships.yaml` and
 checks ECDAT's emitted edges against them. Any match is a hard failure, not
-a score deduction.
+a score deduction. `score.py`'s own `forbidden_edge_violations` takes plain
+`{"from","type","to"}` edges and is exercised only by `_selftest()`'s
+synthetic fixtures -- it was never wired to a real run, because nothing
+produced a real correlated edge to check until `run_ecdat.py --combined`
+(2026-09-26, this task) existed.
+
+**`score_run.py`'s `score_correlation`, the real join.** `ecdat correlate`'s
+own report shape (`source_entity`/`target_entity` = `CryptoAsset` ids, not
+the prose labels `relationships.yaml` uses -- "PAY-004 (app keystore)",
+"edge-lb endpoint") doesn't match `score.py`'s plain edge shape or ground
+truth's labels directly, so `score_correlation` bridges the two: it resolves
+each `same-object` relationship's two endpoints to a harness PKI role (same
+`der_sha256` -> `pki-lock.generated.json` -> role join the `artifact` surface
+already uses), then checks the resolved role pair against
+`_FORBIDDEN_ROLE_PAIRS`, a small hand-translated table (in `score_run.py`,
+not in ground truth) of relationships.yaml's forbidden rows expressed as
+roles. Run via `python harness/eval/run_ecdat.py --combined`, which drives a
+real `ecdat correlate --plan <plan>` subprocess over all 5 adapters below in
+one process and scores its actual output -- see README.md's "Current real
+results" for the number this produced (0 violations, checked for real, not
+skipped) and why the other forbidden pair (PAY-001 vs PAY-004) is
+structurally unreachable with the current adapter set rather than silently
+passing.
 
 ## Secret-leak grep (`secret_leak_scan`)
 

@@ -24,6 +24,10 @@ python harness/eval/validate_cfg_r1.py
 # 3. Run ecdat for real against the Tier A payment-gateway target, convert
 #    its output, and score it -- all in one step:
 python harness/eval/run_ecdat.py
+
+# 3b. Also run a combined `ecdat correlate` over all 5 adapters and score
+#     the forbidden-edge check for real (harness §7.4):
+python harness/eval/run_ecdat.py --combined
 ```
 
 `run_ecdat.py` locates ecdat via the `ECDAT_REPO` environment variable
@@ -41,12 +45,42 @@ Adapters run, and why:
 | `certs-x509` | **live** | The real `targets/payments/payment-gateway/keystore/gateway.p12` keystore generate-pki.sh just produced. No external tool subprocess -- python-cryptography reads the file directly. |
 | `config-chain-spring` | **live** | The real `application.yml` / `application-prod.yml` under `targets/payments/payment-gateway`, resolving `pay.keywrap.transformation`. No external tool subprocess -- ecdat's own static resolver. |
 
-`packages-trivy`, `images-cbomkit-theia`, `hsm-pkcs11`, `kms-aws`,
-`binary-yara-readelf` and `tls-endpoint` are not run by this script: trivy,
-Docker, a PKCS#11 module, a real AWS account and a live TLS listener are not
-available in this environment, and `score_run.py`'s join
-(`_canonical_surface`) currently only recognises three ground-truth surfaces
-(`source`, `artifact`, `configuration`) -- see "What ecdat missed" below.
+Two more adapters are run as REPLAYS of recordings captured for real against
+this harness's own Tier A targets (both READMEs under
+`ecdat/tests/fixtures/recorded/` confirm this):
+
+| Adapter | Mode | What it reads |
+|---|---|---|
+| `tls-endpoint` | replay | `ecdat/tests/fixtures/recorded/sslyze/6.2.0/tier_a_edge_lb.raw.json` -- a REAL sslyze 6.2.0 run against `openssl s_server` standing in for haproxy, presenting the real `generate-pki.sh`-produced `pay-edge.pem` on `edge-lb:8443` (haproxy itself is not installable on this machine; see that fixture's README, "Substitution recorded"). |
+| `packages-trivy` | replay | `ecdat/tests/fixtures/recorded/trivy/0.74.0/e1_supplemental_payment-gateway-fatjar.raw.json` -- a REAL `trivy rootfs` run against this harness's own built `payment-gateway` Spring Boot fat jar (trivy is not installed on this machine; see that fixture's README). |
+
+`score_run.py`'s join (`_canonical_surface`) now recognises five
+ground-truth surfaces: `source`, `artifact`, `configuration`, `tls` (joined
+by `host:port`, and -- since one wire probe is evidence for three planted
+"logical" assets at that endpoint, PAY-005/006/007 -- matched to all three at
+once, not just one) and `dependency` (joined by package name/purl; reachable
+scope is "did a `packages-trivy` run happen at all", not path-suffix,
+because trivy observes a dependency via the BUILT artifact while ground
+truth's PAY-008 location names the SOURCE `pom.xml` -- no path connects the
+two honestly, see `_in_reach`'s docstring in `score_run.py`).
+
+`images-cbomkit-theia`, `hsm-pkcs11` and `kms-aws` are still not run: Docker,
+a PKCS#11 module and a real AWS account are not available in this
+environment.
+
+### Combined run: `ecdat correlate` and the forbidden-edge check
+
+```bash
+python harness/eval/run_ecdat.py --combined
+```
+
+Runs all 5 adapters above through a REAL `ecdat correlate --plan <plan>`
+subprocess (one process, one `CorrelationReport`) instead of 5 independent
+`scan`s, and scores its actual `same-object` relationships against
+`ground-truth/relationships.yaml`'s forbidden pairs via `score_run.py`'s new
+`score_correlation` (see `metrics.md`). This is the first run in this
+harness where the forbidden-edge check is exercised against something real
+rather than only `score.py`'s synthetic self-test.
 
 Run `harness/eval/run_ecdat.py --allow-missing-pki` to score anyway if PKI
 generation is unavailable (certificate findings will show as out of reach
@@ -126,50 +160,69 @@ formality).
 
 ## Current real results (2026-09-26, this environment)
 
-Maven/Docker/semgrep/trivy binaries are not installed on this Windows
-machine, so this is `source-semgrep` (replay of a real recorded run),
-`certs-x509` and `config-chain-spring` (both live) only -- see
-`harness/eval/experiments.md` for tool-version provenance.
+Maven/Docker/semgrep/trivy/haproxy binaries are not installed on this
+Windows machine, so `source-semgrep`, `tls-endpoint` and `packages-trivy` are
+REPLAYS of real recorded tool runs against this harness's own Tier A
+targets; `certs-x509` and `config-chain-spring` are LIVE. See
+`harness/eval/experiments.md` and each fixture's own README (linked above)
+for tool-version provenance.
 
-- **False-certainty rate: 0.0** on all three runs (0 fields reported `KNOWN`
-  where ground truth expects `UNKNOWN`/`INFERRED`/`DECLARED`). Each run's
-  metric self-check confirms the metric is live (an all-`KNOWN` copy of the
-  same run scores 1.0), so this 0.0 is a real result, not a broken join.
-- **Per-surface recall:** `source` 4/4 (PAY-001, PAY-002, PAY-003, TRAP-01),
+- **False-certainty rate: 0.0** on every run that has anything eligible to
+  score (`source-semgrep`, `certs-x509`, `config-chain-spring`: 0 of 8/2/3
+  eligible fields over-claimed). `tls-endpoint` and `packages-trivy` report
+  "not applicable" -- every field either has no stated expectation on that
+  surface (`tls`: PAY-005.yaml's own comment says why, on purpose) or is
+  itself a direct artefact read expected `KNOWN` (`dependency`) -- not a
+  broken join; each run's own metric self-check (or, for `tls`/`dependency`,
+  the "not applicable" branch itself) confirms this.
+- **Per-surface recall, now 8/8 planted PAY-0xx/TRAP-01 findings that ANY
+  adapter reaches:** `source` 4/4 (PAY-001, PAY-002, PAY-003, TRAP-01),
   `artifact` 1/1 (PAY-004's gateway-p12 certificate), `configuration` 1/1
-  (PAY-001's `pay.keywrap.transformation`). Every other surface
-  (`tls`, `dependency`, and `artifact`/`configuration` for the assets these
-  three adapters never reached) is reported "out of reach", not scored as a
-  miss -- these adapters were never pointed at those targets.
-- **Under-claiming rate: 0.0** on all three runs (0 fields reported
-  `UNKNOWN` where ground truth expects `KNOWN`).
-- **Forbidden-edge violations:** not exercised -- no `correlate` run was
-  produced (no plan combining these three adapters' output has been built
-  yet; each was scored as an independent `scan`, not a `correlate`).
-- **Secret-leak scan:** not run against these three runs' output (none of
-  them write key bytes; `certs-x509`'s module docstring notes every finding
-  is run through the shared secret guard before being returned). Previously
+  (PAY-001's `pay.keywrap.transformation`), `tls` **3/3** (PAY-005/006/007,
+  all from the one real sslyze wire probe of `edge-lb:8443`), `dependency`
+  **1/1** (PAY-008's `org.bouncycastle:bcprov-jdk18on`, from the one real
+  trivy rootfs scan of the built fat jar). Every surface an adapter did not
+  reach is still reported "out of reach", never scored as a miss.
+- **Under-claiming rate: 0.0** on every run with anything expected `KNOWN`
+  in scope.
+- **Forbidden-edge violations: 0, genuinely exercised.**
+  `python harness/eval/run_ecdat.py --combined` runs a real `ecdat correlate`
+  over all 5 adapters above in one process: 31 assets, **0 same-object
+  relationships** (gateway-p12 and pay-edge really are different
+  certificates with different `der_sha256` hashes, so ecdat's own
+  correlation engine never links them -- there was nothing to even flag).
+  `score_run.py`'s `score_correlation` resolves 3 assets to harness PKI
+  roles (`pay-edge`, `int-ca-ecc`, `gateway-p12`) and checks
+  `ground-truth/relationships.yaml`'s forbidden `gateway-p12`/`pay-edge`
+  same-object pair against them: 0 violations. The OTHER forbidden pair
+  (PAY-001's source-code RSA key vs PAY-004's keystore key) is **not
+  exercised** -- reported as such by `score_correlation`, not silently
+  passed -- because `source-semgrep` emits no `der_sha256`/`spki_sha256`
+  field at all, so no hash exists on that side for ecdat's identity rule to
+  ever compare.
+- **Secret-leak scan:** not run against these five runs' output (none of
+  them write key bytes; every adapter's own module docstring notes findings
+  are run through the shared secret guard before being returned). Previously
   verified for real against this harness's own generated
   `pay-tls-secret.yaml` / `pay-edge/key.pem` (see `harness/eval/experiments.md`).
 
 ### What ecdat missed, and why
 
-- **Tool unavailable, not a detection gap:** `packages-trivy` (PAY-008,
-  Bouncy Castle dependency), `tls-endpoint` (PAY-005/006/007, the wire
-  observation), `hsm-pkcs11`, `kms-aws`, `images-cbomkit-theia` were not run
-  -- trivy/Docker/a PKCS#11 token/a live TLS listener/an AWS account are not
-  available here. ecdat has real adapters for all of these; they were never
-  invoked.
 - **Mapping gap, not a detection gap:** `INF-017` (the k8s secret carrying
-  the reused `pay-edge` private key) has no adapter in this harness's run at
-  all -- no ecdat adapter reads a raw Kubernetes Secret manifest as its own
-  surface. `score_run.py`'s `_canonical_surface` also only recognises
-  `source`/`artifact`/`configuration`; a `packages-trivy` or `tls-endpoint`
-  run would produce findings score_run.py cannot currently join to
-  anything, which is why they were left out rather than run and shown as an
-  artificial 0.
-- **Not a real gap:** every asset these three adapters *did* reach was
-  found, with the correct epistemic state, and zero false certainty.
+  the reused `pay-edge` private key) is still unscored -- no ecdat adapter
+  reads a raw Kubernetes Secret manifest as its own surface, so it stays
+  "out of reach" on every run above, including the combined one. This is the
+  one remaining item from the original scope that `score_run.py`'s join
+  extension does not fix, because there is no adapter output to join in the
+  first place.
+- **Tool unavailable, not a detection gap:** `images-cbomkit-theia`,
+  `hsm-pkcs11`, `kms-aws` were not run -- Docker, a PKCS#11 token and a real
+  AWS account are not available here. ecdat has real adapters for all three;
+  they were never invoked.
+- **Not a real gap:** every asset an adapter above actually reached was
+  found, with the correct epistemic state, zero false certainty, and (for
+  the two identity-bearing surfaces this combined run could compare) zero
+  forbidden merges.
 
 ## Layout
 
@@ -182,8 +235,11 @@ machine, so this is `source-semgrep` (replay of a real recorded run),
   `test_pki_reproducibility.py` (proves two runs are byte-identical),
   `build-binaries.sh`, `build-images.sh`.
 - `harness/eval/` -- `score.py` (metric functions), `score_run.py` (the real
-  join + CLI scorer), `run_ecdat.py` (drives ecdat for real and scores the
-  result), `ecdat_convert.py` (validates/converts ecdat's run-document JSON),
-  `test_ecdat_convert.py` (fixture-based unit tests for the converter),
-  `validate_cfg_r1.py`, `metrics.md`, `experiments.md`.
+  join + CLI scorer, plus `score_correlation` for the combined-run
+  forbidden-edge check), `run_ecdat.py` (drives ecdat for real, including
+  `--combined`, and scores the result), `ecdat_convert.py`
+  (validates/converts ecdat's run-document JSON), `test_ecdat_convert.py`
+  (fixture-based unit tests for the converter), `test_score_run.py`
+  (fixture-based unit tests for the `tls`/`dependency` joins and
+  `score_correlation`), `validate_cfg_r1.py`, `metrics.md`, `experiments.md`.
 - `docs/` -- the full harness spec.
