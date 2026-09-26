@@ -29,7 +29,12 @@ source surface -- it is reported as out of reach, with the count, so a narrow
 run cannot be mistaken for a complete one.
 
 Usage:
-    python harness/eval/score_run.py <run.json> [<run.json> ...]
+    python harness/eval/score_run.py [--allow-missing-pki] <run.json> [<run.json> ...]
+
+A missing harness/build/pki-lock.generated.json is a loud, non-zero-exit
+failure by default (every certificate finding would otherwise silently score
+as "out of reach" instead of failing the way a broken build step should);
+pass --allow-missing-pki to score anyway.
 
 Not domain code -- harness eval tooling only.
 """
@@ -548,11 +553,34 @@ def _self_check(report: dict[str, Any], control: dict[str, Any]) -> tuple[str, b
 
 
 def main(argv: list[str]) -> int:
-    if not argv:
+    allow_missing_pki = "--allow-missing-pki" in argv
+    run_paths = [a for a in argv if a != "--allow-missing-pki"]
+
+    if not run_paths:
         print(__doc__)
         return 2
+
+    # Loud failure by default (unless --allow-missing-pki): a missing
+    # pki-lock.generated.json silently zeroes out every certificate
+    # ('artifact' surface) finding's chance of being scored, which would
+    # otherwise read as a real 0/0-recall result instead of a broken build
+    # step. Checked once, before scoring any run, rather than per-run inside
+    # the loop below, because it is the same fatal precondition for all of
+    # them.
+    if not PKI_LOCK.is_file() and not allow_missing_pki:
+        print(
+            f"FATAL: {PKI_LOCK} is missing.\n"
+            "Every certificate ('artifact' surface) finding in every run below would "
+            "silently score as out of reach instead of being resolved to a planted PKI "
+            "role, which is not a real result.\n"
+            "Run harness/build/generate-pki.sh first, or pass --allow-missing-pki to "
+            "score anyway and accept that those assets will not be scored.",
+            file=sys.stderr,
+        )
+        return 1
+
     exit_code = 0
-    for arg in argv:
+    for arg in run_paths:
         path = Path(arg)
         run = json.loads(path.read_text(encoding="utf-8"))
         report = score_run(run)
@@ -562,7 +590,8 @@ def main(argv: list[str]) -> int:
             print(
                 "    NOTE: harness/build/pki-lock.generated.json is missing, so no "
                 "certificate can be resolved to a planted role. Run "
-                "harness/build/generate-pki.sh."
+                "harness/build/generate-pki.sh (or this run was scored with "
+                "--allow-missing-pki)."
             )
         message, ok = _self_check(report, verify_metric_is_live(run))
         print(message)

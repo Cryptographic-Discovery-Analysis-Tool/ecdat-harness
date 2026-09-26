@@ -2,11 +2,16 @@
 
 Implemented in `score.py`, in the order the 2026-09-17 task specified:
 false-certainty rate first, then per-surface recall, forbidden-edge check,
-secret-leak grep. Every function below currently runs only against
-synthetic fixtures (`score.py --selftest`) plus a real run of
-`secret_leak_scan` against this harness's own generated artifacts (see
-`experiments.md`) -- there is no real ECDAT output to score yet, since
-`ecdat/src/ecdat/adapters/` has no adapters built.
+secret-leak grep. `score_run.py` joins these functions to a REAL `ecdat scan`
+run document (matching findings to planted Tier A assets by source path
+suffix / cert DER SHA-256 via `harness/build/pki-lock.generated.json` /
+config property key) -- see `harness/eval/run_ecdat.py`, which runs ecdat for
+real (source-semgrep replaying a real recorded semgrep run over this
+harness's own Tier A source; certs-x509 and config-chain-spring live against
+the real payment-gateway keystore and config) and scores the result.
+`score.py`'s own `_selftest()` still runs only against synthetic fixtures,
+deliberately: it tests these functions' contracts in isolation from any real
+run.
 
 ## False-certainty rate (`false_certainty_rate`)
 
@@ -56,12 +61,25 @@ base64-encoded *certificate* would also be flagged as a candidate, which is
 an intentional false-positive bias (over-flagging is cheap to review;
 missing a real leak is not).
 
+## Under-claiming rate (`score_run.py`'s `score_run()`, not `score.py`)
+
+> §8.2: tracked alongside false-certainty rate because "an all-UNKNOWN tool
+> scores a perfect false-certainty rate and is useless."
+
+Fields the run reported `UNKNOWN` where the answer key says `KNOWN`, scoped
+to the surfaces the run actually reached (same scoping rule as recall).
+Implemented in `score_run.py` (not `score.py`, since it needs the real
+asset join, not just the two flat lists `false_certainty_rate` takes) and
+printed alongside the false-certainty rate every time `run_ecdat.py` or
+`score_run.py` runs.
+
 ## Not yet implemented
 
 Everything else in §8.2's table (asset-level P/R after merge, classification
-exact-match, purpose accuracy, under-claiming rate, relationship-label
-accuracy, visibility recall, CBOM schema validation, quantum-tier exact
-match, Mosca/sensitivity property tests, recommendation accuracy, temporal
-delta, performance) is out of scope for the 2026-09-17 task, which asked
-specifically for false-certainty rate, per-surface recall, the
-forbidden-edge check, and the secret-leak grep.
+exact-match, purpose accuracy, relationship-label accuracy, visibility
+recall, CBOM schema validation, quantum-tier exact match, Mosca/sensitivity
+property tests, recommendation accuracy, temporal delta, performance) is out
+of scope for the 2026-09-17 task, which asked specifically for
+false-certainty rate, per-surface recall, the forbidden-edge check, and the
+secret-leak grep. Under-claiming rate (above) and the real-run join were
+added afterward in `score_run.py` / `run_ecdat.py`.
