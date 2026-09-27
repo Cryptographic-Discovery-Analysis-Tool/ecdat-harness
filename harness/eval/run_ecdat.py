@@ -175,6 +175,57 @@ def _run_ecdat_correlate(ecdat_repo: Path, plan_path: Path, out_path: Path) -> d
     return json.loads(out_path.read_text(encoding="utf-8"))
 
 
+def _finding_signature(finding: dict[str, Any]) -> tuple[Any, ...]:
+    """A comparable, order-independent key for one finding: which fields it
+    carries and what KNOWN/UNKNOWN each one is, ignoring finding_id/
+    evidence_refs (which legitimately differ between a live run and a
+    replay run of the same underlying scan -- they are assigned by index,
+    not by content)."""
+    fields = tuple(
+        sorted(
+            (f["field"], json.dumps(f.get("value"), sort_keys=True), f.get("epistemic_state"))
+            for f in finding.get("fields", [])
+        )
+    )
+    return fields
+
+
+def _print_live_vs_replay(name: str, live_doc: dict[str, Any], replay_doc: dict[str, Any]) -> None:
+    """DEV-016 / this task's §3: 'Run it and compare live vs replay
+    results: same findings? If they differ, explain why (don't "fix" by
+    editing ground truth).' Prints coverage counts, finding counts, and a
+    set difference of finding signatures -- never silently declares them
+    equal without having actually compared the content."""
+    live_scanned = set(live_doc.get("coverage", {}).get("scanned", ()))
+    replay_scanned = set(replay_doc.get("coverage", {}).get("scanned", ()))
+    live_sigs = {_finding_signature(f) for f in live_doc.get("findings", ())}
+    replay_sigs = {_finding_signature(f) for f in replay_doc.get("findings", ())}
+
+    print(f"\n=== live vs replay: {name} ===")
+    print(f"    live   tool_version : {live_doc.get('raw_captures', [{}])[0].get('tool_version', '?')}")
+    print(f"    replay tool_version : {replay_doc.get('raw_captures', [{}])[0].get('tool_version', '?')}")
+    print(f"    live   coverage.scanned : {len(live_scanned)} item(s)")
+    print(f"    replay coverage.scanned : {len(replay_scanned)} item(s)")
+    print(f"    live   findings : {len(live_doc.get('findings', ()))}")
+    print(f"    replay findings : {len(replay_doc.get('findings', ()))}")
+
+    if live_sigs == replay_sigs:
+        print("    RESULT: identical finding content (same fields, same values, same states)")
+    else:
+        only_live = live_sigs - replay_sigs
+        only_replay = replay_sigs - live_sigs
+        print(
+            f"    RESULT: DIFFER -- {len(only_live)} finding(s) only in the live run, "
+            f"{len(only_replay)} only in the replay fixture (paths in coverage.scanned are "
+            "target-relative and are expected to match only when --input points at the same "
+            "directory both ways)"
+        )
+        for sig in sorted(only_live, key=repr)[:5]:
+            print(f"        only in LIVE:   {sig}")
+        for sig in sorted(only_replay, key=repr)[:5]:
+            print(f"        only in REPLAY: {sig}")
+
+
 def _print_correlation_report(report: dict[str, Any]) -> None:
     print("\n=== combined correlate run: forbidden-edge check (harness §7.4) ===")
     print(f"same-object relationships checked : {report['identity_relationships_checked']}")
@@ -221,8 +272,40 @@ def _check_pki_lock(allow_missing: bool) -> None:
     raise SystemExit(1)
 
 
+def _find_payment_gateway_jar(payment_gateway: Path) -> Path | None:
+    """The fat jar `mvn package` produces under `target/`, if one has been
+    built (DEV-016/OI-009: this harness does not build it itself -- see the
+    FATAL message `main()` prints when it is missing). Excludes
+    `*-sources.jar` and `*.jar.original` (the plain, pre-repackage jar Spring
+    Boot's repackage goal leaves behind), matching the one real jar the
+    trivy 0.74.0 fixture README's `rootfs` command was pointed at."""
+    target_dir = payment_gateway / "target"
+    if not target_dir.is_dir():
+        return None
+    candidates = [
+        p
+        for p in target_dir.glob("*.jar")
+        if not p.name.endswith("-sources.jar") and not p.name.endswith(".jar.original")
+    ]
+    return candidates[0] if candidates else None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="run source-semgrep (and packages-trivy, if the payment-gateway fat jar has "
+        "been built -- see FATAL message otherwise) LIVE against the real tools instead of "
+        "replaying tests/fixtures/recorded/, then print a live-vs-replay comparison for both. "
+        "Every other adapter here is already live (see this module's docstring); this flag "
+        "only changes source-semgrep and packages-trivy. Routing the live subprocess through a "
+        "launcher (e.g. WSL on Windows, OI-009) is this shell's job, not this script's: set "
+        "ECDAT_SEMGREP_LAUNCHER / ECDAT_TRIVY_LAUNCHER (or the generic ECDAT_TOOL_LAUNCHER) "
+        "before invoking this script and they are inherited by the ecdat subprocess unchanged "
+        "-- see ecdat/src/ecdat/adapters/live_launcher.py. Off by default so CI without WSL "
+        "(or any machine without semgrep/trivy installed) keeps working exactly as before.",
+    )
     parser.add_argument(
         "--allow-missing-pki",
         action="store_true",
@@ -336,14 +419,45 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     runs: dict[str, dict[str, Any]] = {}
+    # populated only under --live: adapter name -> (live run doc, replay run
+    # doc), for the live-vs-replay comparison printed after scoring.
+    live_vs_replay: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
 
-    print("=== source-semgrep (replay of a real semgrep 1.99.0 run over this harness's own Tier A source) ===")
-    runs["source-semgrep"] = _run_ecdat_scan(
-        ecdat_repo,
-        "source-semgrep",
-        ["--input", str(semgrep_fixture)],
-        OUT_DIR / "source-semgrep.run.json",
-    )
+    payment_gateway_src = payment_gateway / "src"
+    if args.live:
+        print(
+            "=== source-semgrep (LIVE semgrep run over this harness's own Tier A source; "
+            f"launcher: {os.environ.get('ECDAT_SEMGREP_LAUNCHER') or os.environ.get('ECDAT_TOOL_LAUNCHER') or '(none configured)'}) ==="
+        )
+        live_semgrep = _run_ecdat_scan(
+            ecdat_repo,
+            "source-semgrep",
+            ["--live", "--input", str(payment_gateway_src)],
+            OUT_DIR / "source-semgrep.live.run.json",
+        )
+        print(
+            "--- source-semgrep (replay of the recorded semgrep 1.99.0 fixture, "
+            "for comparison only -- not scored) ---"
+        )
+        replay_semgrep = _run_ecdat_scan(
+            ecdat_repo,
+            "source-semgrep",
+            ["--input", str(semgrep_fixture)],
+            OUT_DIR / "source-semgrep.replay.run.json",
+        )
+        runs["source-semgrep"] = live_semgrep
+        live_vs_replay["source-semgrep"] = (live_semgrep, replay_semgrep)
+    else:
+        print(
+            "=== source-semgrep (replay of a real semgrep 1.99.0 run over this harness's own "
+            "Tier A source) ==="
+        )
+        runs["source-semgrep"] = _run_ecdat_scan(
+            ecdat_repo,
+            "source-semgrep",
+            ["--input", str(semgrep_fixture)],
+            OUT_DIR / "source-semgrep.run.json",
+        )
 
     print("\n=== certs-x509 (LIVE read of the real gateway.p12 keystore) ===")
     runs["certs-x509"] = _run_ecdat_scan(
@@ -395,16 +509,53 @@ def main(argv: list[str] | None = None) -> int:
         OUT_DIR / "tls-endpoint.run.json",
     )
 
-    print(
-        "\n=== packages-trivy (replay of a real trivy 0.74.0 rootfs run against this "
-        "harness's own built payment-gateway fat jar) ==="
-    )
-    runs["packages-trivy"] = _run_ecdat_scan(
-        ecdat_repo,
-        "packages-trivy",
-        ["--input", str(trivy_fixture)],
-        OUT_DIR / "packages-trivy.run.json",
-    )
+    jar = _find_payment_gateway_jar(payment_gateway) if args.live else None
+    if args.live and jar is not None:
+        print(
+            "\n=== packages-trivy (LIVE trivy rootfs run against the real built "
+            f"payment-gateway fat jar {jar.name}; launcher: "
+            f"{os.environ.get('ECDAT_TRIVY_LAUNCHER') or os.environ.get('ECDAT_TOOL_LAUNCHER') or '(none configured)'}) ==="
+        )
+        live_trivy = _run_ecdat_scan(
+            ecdat_repo,
+            "packages-trivy",
+            ["--live", "--input", str(jar.parent)],
+            OUT_DIR / "packages-trivy.live.run.json",
+        )
+        print(
+            "--- packages-trivy (replay of the recorded trivy 0.74.0 fixture, "
+            "for comparison only -- not scored) ---"
+        )
+        replay_trivy = _run_ecdat_scan(
+            ecdat_repo,
+            "packages-trivy",
+            ["--input", str(trivy_fixture)],
+            OUT_DIR / "packages-trivy.replay.run.json",
+        )
+        runs["packages-trivy"] = live_trivy
+        live_vs_replay["packages-trivy"] = (live_trivy, replay_trivy)
+    else:
+        if args.live:
+            print(
+                "\nBLOCKED: --live was requested for packages-trivy but no fat jar was found "
+                f"under {payment_gateway / 'target'}. This harness does not build it -- run, "
+                "from either a Windows shell with Maven on PATH or inside WSL:\n"
+                f"    cd \"{payment_gateway}\" && mvn -q package -DskipTests\n"
+                "(needs network access to Maven Central unless ~/.m2 is already populated). "
+                "Falling back to the recorded trivy 0.74.0 fixture for this adapter so the "
+                "rest of this run can still complete.",
+                file=sys.stderr,
+            )
+        print(
+            "\n=== packages-trivy (replay of a real trivy 0.74.0 rootfs run against this "
+            "harness's own built payment-gateway fat jar) ==="
+        )
+        runs["packages-trivy"] = _run_ecdat_scan(
+            ecdat_repo,
+            "packages-trivy",
+            ["--input", str(trivy_fixture)],
+            OUT_DIR / "packages-trivy.run.json",
+        )
 
     overall_ok = True
     for name, run in runs.items():
@@ -419,6 +570,10 @@ def main(argv: list[str] | None = None) -> int:
         message, ok = _self_check(report, verify_metric_is_live(run))
         print(message)
         overall_ok = overall_ok and ok
+
+    if live_vs_replay:
+        for name, (live_doc, replay_doc) in live_vs_replay.items():
+            _print_live_vs_replay(name, live_doc, replay_doc)
 
     if args.combined:
         plan = [

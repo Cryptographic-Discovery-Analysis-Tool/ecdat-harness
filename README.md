@@ -28,6 +28,13 @@ python harness/eval/run_ecdat.py
 # 3b. Also run a combined `ecdat correlate` over all 5 adapters and score
 #     the forbidden-edge check for real (harness §7.4):
 python harness/eval/run_ecdat.py --combined
+
+# 3c. Run source-semgrep and packages-trivy LIVE (real subprocess, not
+#     replay of tests/fixtures/recorded/) instead of the default replay --
+#     needs a WSL (or other launcher) with semgrep/trivy installed; see
+#     "Live mode" below:
+ECDAT_SEMGREP_LAUNCHER="wsl -e" ECDAT_TRIVY_LAUNCHER="wsl -e" \
+  python harness/eval/run_ecdat.py --live
 ```
 
 `run_ecdat.py` locates ecdat via the `ECDAT_REPO` environment variable
@@ -94,6 +101,46 @@ To score an already-produced run document directly (e.g. from CI, or a
 ```bash
 python harness/eval/score_run.py harness/eval/out/*.run.json
 ```
+
+### Live mode: `source-semgrep`/`packages-trivy` for real, not replayed
+
+```bash
+ECDAT_SEMGREP_LAUNCHER="wsl -e" ECDAT_TRIVY_LAUNCHER="wsl -e" \
+  python harness/eval/run_ecdat.py --live
+```
+
+By default `run_ecdat.py` replays the two recorded fixtures named in the table
+above (CLAUDE.md: replay is for tests and scoring only, but it is also the
+only thing that works on a machine without semgrep/trivy installed -- which
+is why replay stays the default and CI does not need this flag). `--live`
+switches `source-semgrep` to a real `semgrep --config rules/semgrep ...`
+subprocess against this harness's own `targets/payments/payment-gateway/src`,
+and `packages-trivy` to a real `trivy rootfs ...` subprocess against the
+payment-gateway's built fat jar (`targets/payments/payment-gateway/target/*.jar`
+-- built separately, this script does not build it; run
+`cd targets/payments/payment-gateway && mvn -q package -DskipTests` first,
+from wherever Maven and network access to Maven Central are available). If
+that jar has not been built, `--live` prints the exact command above, reports
+itself blocked for that one adapter, and falls back to the recorded trivy
+fixture so the rest of the run still completes.
+
+Neither tool needs to be installed on the host running this script: ecdat's
+own `adapters/live_launcher.py` (see ecdat's `docs/deviations.md` DEV-015)
+routes the subprocess through `ECDAT_SEMGREP_LAUNCHER`/`ECDAT_TRIVY_LAUNCHER`
+(or the generic `ECDAT_TOOL_LAUNCHER`) -- `"wsl -e"` on a Windows machine
+with WSL, but the mechanism is generic (any launcher prefix), and this
+script never hardcodes WSL itself; it only reads whatever launcher env vars
+are already set in the calling shell and lets the ecdat subprocess inherit
+them. With `--live`, both adapters also run once in replay mode purely for
+comparison (not scored) and print a "live vs replay" section: finding counts,
+coverage counts, and a set difference of finding content. A real run on a
+Windows dev machine reproduced the recorded semgrep fixture's 5 findings
+exactly (same rule/file/line/value); the only difference was the `path`
+field's literal string, because the *recorded fixture* itself stores
+`/mnt/c/...`-style paths from when it was captured directly inside WSL,
+while a live run today translates back to a Windows path -- a
+path-representation difference from how the fixture was captured, not a
+difference in what was found (see DEV-015 for the full comparison).
 
 ## Deterministic PKI
 
