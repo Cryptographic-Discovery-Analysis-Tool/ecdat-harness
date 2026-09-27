@@ -182,10 +182,12 @@ harness`). Three pieces make that true:
 2. **Fixed serials and validity dates** (`-set_serial`, `-not_before`,
    `-not_after` in `generate-pki.sh`) instead of an auto-incrementing `.srl`
    file and "now". `pay-edge`'s 90-day validity window is anchored to a
-   documented reference date (currently 2026-09-01) that needs a periodic
-   bump to stay non-expired against real wall-clock -- the same maintenance
-   a random-every-run script always needed, just explicit now instead of
-   automatic. `score_run.py` already evaluates lifecycle state against
+   documented reference date (currently 2026-09-27; see "Bumping the PKI"
+   below) that needs a periodic bump to stay non-expired against real
+   wall-clock -- the same maintenance a random-every-run script always
+   needed, just explicit now instead of automatic (and, since
+   `harness/build/bump-pki.sh` was added, one command instead of a hand
+   edit). `score_run.py` already evaluates lifecycle state against
    `pki-lock.generated.json`, never wall-clock, so this changes nothing it
    reads.
 3. **RFC 6979 deterministic ECDSA nonces** (`-sigopt nonce-type:1`, OpenSSL
@@ -204,6 +206,53 @@ canonicalize to DER via `openssl x509 -outform DER` before hashing, never
 hash the raw `.p12` bytes (see `topo_x3_der_hash_equality/README.md`'s
 finding on why that canonicalization step is load-bearing, not a
 formality).
+
+### Bumping the PKI
+
+`pay-edge` is genuinely short-lived by design (90d, harness §6 table), so
+its fixed `NOT_BEFORE` anchor in `generate-pki.sh` needs periodic bumping to
+stay non-expired against real wall-clock -- the same maintenance a
+random-every-run script always needed, just explicit now. Run:
+
+```bash
+harness/build/bump-pki.sh <YYYYMMDD>
+```
+
+This rewrites `generate-pki.sh`'s five fixed dates from one new anchor
+(same offsets as always: root +20y, int-ca-ecc +10y, pay-edge +90d,
+gateway-p12 +1y) and re-runs it. `harness/build/test_pki_freshness.py`
+(part of `python -m pytest harness`) fails loudly, with the same
+instructions, once any generated cert is within 30 days of expiry -- that
+failure is the trigger to run this.
+
+**A bump is not just a harness-side operation.** Every ecdat fixture that
+cites this PKI's exact bytes goes stale the moment the anchor date changes
+(this happened on 2026-09-26, `ecdat/docs/open-issues.md` OI-019, and again
+on 2026-09-27) and must be re-recorded by hand with real tools -- no
+hand-editing recorded output. `bump-pki.sh`'s own header comment carries
+the full checklist (which ecdat fixtures, which exact commands); the short
+version:
+
+1. `python -m pytest harness/build/test_pki_reproducibility.py` (confirm
+   still byte-identical across two runs).
+2. In `ecdat`, re-record `tests/fixtures/recorded/openssl/3.5.4/
+   topo_x3_der_hash_equality/`, `.../e4_seclevel_tier_a_certs/`, and
+   `tests/fixtures/recorded/sslyze/6.2.0/tier_a_edge_lb.raw.json` (+ its
+   README and `tier_a_edge_lb_scan.py`'s companion `.stderr.log`) against a
+   local `openssl s_server` mirroring
+   `targets/payments/edge-lb/haproxy.cfg`, and update
+   `tests/unit/adapters/test_tls.py`'s hardcoded `der_sha256`/`spki_sha256`
+   constants (`spki_sha256` usually does NOT change -- the key is
+   seed-derived, not date-derived; only `der_sha256`, which hashes the whole
+   certificate including its validity dates, does).
+3. Kill any `s_server` you started.
+4. `python -m pytest -q` (once at a time) + every `tools/ci/check_*.py` in
+   `ecdat`; `python -m pytest -q harness` and
+   `python harness/eval/run_ecdat.py --combined` (10/10, 0 forbidden-edge
+   violations) in `ecdat-harness`.
+
+Ground truth (`ground-truth/`) references PKI roles by NAME, never by
+fingerprint or date (H3), so a bump never requires editing it.
 
 ## Current real results (2026-09-27, this environment)
 
