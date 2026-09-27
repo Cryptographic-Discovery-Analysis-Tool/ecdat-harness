@@ -29,7 +29,12 @@ source surface -- it is reported as out of reach, with the count, so a narrow
 run cannot be mistaken for a complete one.
 
 Usage:
-    python harness/eval/score_run.py <run.json> [<run.json> ...]
+    python harness/eval/score_run.py [--allow-missing-pki] <run.json> [<run.json> ...]
+
+A missing harness/build/pki-lock.generated.json is a loud, non-zero-exit
+failure by default (every certificate finding would otherwise silently score
+as "out of reach" instead of failing the way a broken build step should);
+pass --allow-missing-pki to score anyway.
 
 Not domain code -- harness eval tooling only.
 """
@@ -154,8 +159,9 @@ def _canonical_surface(surface: str) -> str | None:
     """ECDAT's per-run surface string -> the ground-truth surface name.
 
     ECDAT scopes a surface to the thing it scanned (`certdir:<dir>`,
-    `config:<root>:<key>`), which is why its surface strings are not the
-    ground-truth names. The mapping happens here and not in ECDAT.
+    `config:<root>:<key>`, `tls:<host>:<port>`, `packages:<scanned_target>`),
+    which is why its surface strings are not the ground-truth names. The
+    mapping happens here and not in ECDAT.
     """
     if surface == "source":
         return "source"
@@ -163,6 +169,10 @@ def _canonical_surface(surface: str) -> str | None:
         return "artifact"
     if surface.startswith("config:"):
         return "configuration"
+    if surface.startswith("tls:"):
+        return "tls"
+    if surface.startswith("packages:"):
+        return "dependency"
     return None
 
 
@@ -181,17 +191,41 @@ def _property_key(surface: str) -> str | None:
 # --- scoping ---------------------------------------------------------------
 
 
-def _in_reach(locations: list[dict[str, Any]], run: dict[str, Any]) -> list[dict[str, Any]]:
+def _in_reach(
+    locations: list[dict[str, Any]], run: dict[str, Any], surfaces_run: set[str]
+) -> list[dict[str, Any]]:
     """The planted locations this run actually had the chance to observe.
 
-    A location is in reach if one of the files the run reports as scanned ends
-    with that location's recorded path. Locations with no on-disk path (the
-    `tls` surface is a host:port, not a file) are never in reach of a run that
-    only reads files, and are reported as such rather than scored as misses.
+    A location is in reach if one of the files/endpoints the run reports as
+    scanned ends with that location's recorded path (`tls`'s "path" is a
+    host:port string, e.g. "edge-lb:8443", not a file -- the tls-endpoint
+    adapter's own `coverage.scanned` entries ("sslyze edge-lb:8443", "openssl
+    s_client edge-lb:8443") end with exactly that string, so this needs no
+    special case).
+
+    `dependency` is the one surface where path-suffix matching would be
+    dishonest rather than merely inapplicable: ground truth's PAY-008
+    location names `payments/payment-gateway/pom.xml` -- the SOURCE
+    declaration -- but `packages-trivy` (this harness's only dependency
+    adapter) observes the dependency by inventorying the BUILT artifact
+    (`trivy rootfs` on the fat jar), whose own `coverage.scanned` is
+    whatever trivy's `ArtifactName` happened to report for that invocation
+    (the recorded fixture: "."). No path-suffix rule connects those two
+    honestly. So a dependency location counts as in reach if this run ran a
+    dependency-surface scan at all (`surfaces_run` contains "dependency") --
+    scoped to "did a packages adapter run", not "did it read this exact
+    file", because that is the actual granularity a package-manifest
+    inventory operates at. Recall is still computed per planted package (by
+    name/purl, see `_match`), so a trivy run that ran but did not report
+    bcprov-jdk18on still scores a real miss, not a free pass.
     """
     scanned = [_norm(p) for p in (run.get("coverage") or {}).get("scanned", ())]
     reached = []
     for location in locations:
+        if location["surface"] == "dependency":
+            if "dependency" in surfaces_run:
+                reached.append(location)
+            continue
         path = location.get("path")
         if not path:
             continue
@@ -244,6 +278,20 @@ def _match(
                 return location["asset_id"], ""
         return None, f"property key '{key}' is not a planted asset"
 
+    if surface == "dependency":
+        # packages-trivy's "name" field is trivy's own package Name, which
+        # for a Maven package is literally "groupId:artifactId" -- the exact
+        # string ground truth records as the dependency's `key` (see
+        # PAY-008.yaml: key: org.bouncycastle:bcprov-jdk18on). No purl
+        # normalisation needed; trivy already reports it in the same shape.
+        name = str((fields.get("name") or {}).get("value") or "")
+        if not name:
+            return None, "no name field on a dependency finding"
+        for location in candidates:
+            if location.get("key") == name:
+                return location["asset_id"], ""
+        return None, f"package '{name}' is not a planted asset"
+
     return None, f"no join defined for surface '{surface}'"
 
 
@@ -257,12 +305,36 @@ def _unmatched_label(
         return str((fields.get("subject") or {}).get("value") or finding["finding_id"])
     if surface == "configuration":
         return _property_key(finding["surface"]) or finding["finding_id"]
+    if surface == "dependency":
+        return str((fields.get("name") or {}).get("value") or finding["finding_id"])
+    if surface == "tls":
+        return finding["surface"]
     return finding["finding_id"]
+
+
+def _surfaces_run(run: dict[str, Any]) -> set[str]:
+    """Which ground-truth surfaces this run actually exercised, independent
+    of whether any finding on that surface matched a planted asset. Used by
+    `_in_reach` for the `dependency` surface (see its docstring) and to keep
+    that scoping decision in one place rather than re-deriving it twice."""
+    surfaces = {
+        canonical
+        for canonical in (_canonical_surface(f.get("surface", "")) for f in run.get("findings", ()))
+        if canonical
+    }
+    # A trivy run that finds zero packages (e.g. TRAP-07's no-crypto-service)
+    # still ran the dependency surface -- coverage.scanned says so even with
+    # no findings (harness §7.3: "silence != scanned") -- so this is also
+    # keyed off adapter_id, not just finding presence.
+    if str(run.get("adapter_id", "")).startswith("packages-"):
+        surfaces.add("dependency")
+    return surfaces
 
 
 def score_run(run: dict[str, Any]) -> dict[str, Any]:
     all_locations = _locations()
-    reachable = _in_reach(all_locations, run)
+    surfaces_run = _surfaces_run(run)
+    reachable = _in_reach(all_locations, run, surfaces_run)
     expected_by_surface = _expected_states()
     roles = _pki_roles()
 
@@ -290,6 +362,51 @@ def score_run(run: dict[str, Any]) -> dict[str, Any]:
             )
             continue
         surfaces_seen.add(surface)
+
+        if surface == "tls":
+            # One wire probe is evidence for several planted "logical"
+            # assets at once: PAY-005 (the certificate identity), PAY-006
+            # (the negotiated key-agreement group(s)) and PAY-007 (the
+            # cipher suites) all share the SAME ground-truth location
+            # (surface: tls, path: "edge-lb:8443") because they are three
+            # different algorithm-family facts about one observed endpoint,
+            # not three different places. ECDAT itself also emits exactly
+            # one Finding per probe (adapters/tls/adapter.py). So this is
+            # the one surface where a single finding matches every reachable
+            # location at that path, not just one -- anything else would
+            # under-count recall for two of the three assets purely because
+            # score_run.py's join is per-finding-per-asset everywhere else.
+            candidates = [loc for loc in reachable if loc["surface"] == "tls"]
+            path = _norm(finding["surface"][len("tls:") :])
+            path_matches = [loc for loc in candidates if path.endswith(_norm(loc["path"]))]
+            if not path_matches:
+                unmatched.append(
+                    {
+                        "finding_id": finding["finding_id"],
+                        "label": finding["surface"],
+                        "reason": "tls endpoint is not a planted asset location",
+                        "fields": {},
+                    }
+                )
+                continue
+            for location in path_matches:
+                asset_id = location["asset_id"]
+                matched_findings.append({"finding_id": asset_id, "surface": surface})
+                for name, entry in fields.items():
+                    if (asset_id, surface, name) not in expected_by_surface:
+                        expectation_gaps.append(
+                            {"asset_id": asset_id, "surface": surface, "field": name}
+                        )
+                        continue
+                    observed_fields.append(
+                        {
+                            "asset_id": f"{asset_id}@{surface}",
+                            "field": name,
+                            "epistemic_state": entry["epistemic_state"],
+                        }
+                    )
+            continue
+
         asset_id, why = _match(finding, fields, surface, reachable, roles)
         if asset_id is None:
             unmatched.append(
@@ -396,6 +513,118 @@ def score_run(run: dict[str, Any]) -> dict[str, Any]:
         "outcome": run.get("outcome"),
         "failure_reason": run.get("failure_reason"),
         "pki_lock_available": bool(roles),
+    }
+
+
+# --- forbidden-edge scoring of an `ecdat correlate` report ------------------
+
+#: harness §7.4 / ground-truth/relationships.yaml's `forbidden: true` rows,
+#: translated once, here, from the free-text entity names a human reads
+#: ("PAY-004 (app keystore)", "edge-lb endpoint") to the harness PKI roles
+#: those entities resolve to (H3: ground truth never names a fingerprint, but
+#: it does name a role -- PAY-004.yaml `role: gateway-p12`, PAY-005.yaml
+#: `role: pay-edge`). This is an interpretation of relationships.yaml living
+#: in harness code, not an edit to ground truth: relationships.yaml itself is
+#: untouched, and this table only exists because `ecdat correlate`'s
+#: `same-object` relationships name CryptoAsset ids, not the prose labels
+#: ground truth uses, so *something* has to bridge the two to make the check
+#: automatic instead of a human re-reading the JSON every time.
+_FORBIDDEN_ROLE_PAIRS: dict[frozenset[str], str] = {
+    frozenset({"gateway-p12", "pay-edge"}): (
+        "relationships.yaml: 'PAY-004 (app keystore) serves/presents edge-lb endpoint' "
+        "-- forbidden because the LB actually serves pay-edge (PAY-005), a different "
+        "certificate; gateway-p12 and pay-edge must never be asserted same-object."
+    ),
+}
+
+#: The other forbidden pair in relationships.yaml ('PAY-001 RSA key (source)
+#: same-object/shares-public-key PAY-004 RSA key (keystore)') is recorded
+#: here, not in _FORBIDDEN_ROLE_PAIRS, because it can never be checked this
+#: way: PAY-001 is a source-code RSA-OAEP transformation string
+#: (source-semgrep), which carries no der_sha256/spki_sha256 field at all --
+#: there is no hash on that side to resolve to a role, or to compare, no
+#: matter what a correlate run contains. `ecdat.correlation.engine`'s own
+#: docstring confirms this is structural, not a gap in this harness's plan:
+#: it only ever computes identity from `der_sha256`/`spki_sha256` fields, and
+#: no adapter in this harness's reach emits either for source-code findings.
+_STRUCTURALLY_UNREACHABLE_FORBIDDEN_EDGE = (
+    "relationships.yaml: 'PAY-001 RSA key (source) same-object/shares-public-key "
+    "PAY-004 RSA key (keystore)' -- NOT exercised by this check: PAY-001 (source-semgrep) "
+    "carries no der_sha256/spki_sha256 field, so no hash exists on that side for "
+    "ecdat.correlation.engine's identity rule (IDENTITY-CERT-DER-001, the only one it acts "
+    "on) to ever compare or resolve to a role. This is a structural gap in the current "
+    "adapter set, not a verified absence -- reported honestly rather than silently passed."
+)
+
+
+def _asset_known_field(asset: dict[str, Any], field_name: str) -> str | None:
+    for field in asset.get("fields", ()):
+        if field.get("field") == field_name and field.get("epistemic_state") == "KNOWN":
+            value = field.get("value")
+            return str(value) if value else None
+    return None
+
+
+def score_correlation(document: dict[str, Any], roles: dict[str, str]) -> dict[str, Any]:
+    """Score one `ecdat correlate --format report` document (see
+    `_correlate_document` in ecdat's cli.py) against the forbidden pairs in
+    `_FORBIDDEN_ROLE_PAIRS`.
+
+    `ecdat.correlation.engine.correlate()` only ever emits a `same-object`
+    relationship when two assets share a KNOWN `der_sha256` value (its own
+    docstring: "ONLY that"), and only between assets that carry the field at
+    all. So this check resolves each `same-object` relationship's two
+    endpoints to a harness PKI role the same way score_run.py's `artifact`
+    join does (der_sha256 -> pki-lock -> role), and flags a violation only if
+    the resolved role pair is one ground truth forbids. A relationship whose
+    endpoints do not both resolve to a role (e.g. an asset from a surface
+    this harness's PKI lock does not cover) is not checked -- silently
+    passing it would be exactly the kind of manufactured pass this harness
+    exists to avoid, so it is instead surfaced under `unresolved_edges`.
+    """
+    asset_roles: dict[str, str] = {}
+    for asset in document.get("assets", ()):
+        der = _asset_known_field(asset, "der_sha256")
+        if der:
+            role = roles.get(der.lower())
+            if role:
+                asset_roles[asset["asset_id"]] = role
+
+    violations: list[dict[str, Any]] = []
+    unresolved_edges: list[dict[str, Any]] = []
+    identity_relationships = [
+        rel for rel in document.get("relationships", ()) if rel.get("type") == "same-object"
+    ]
+    for rel in identity_relationships:
+        source_role = asset_roles.get(rel.get("source_entity"))
+        target_role = asset_roles.get(rel.get("target_entity"))
+        if source_role is None or target_role is None:
+            unresolved_edges.append(
+                {
+                    "source_entity": rel.get("source_entity"),
+                    "target_entity": rel.get("target_entity"),
+                    "reason": "one or both endpoints did not resolve to a harness PKI role",
+                }
+            )
+            continue
+        pair = frozenset({source_role, target_role})
+        note = _FORBIDDEN_ROLE_PAIRS.get(pair)
+        if note is not None:
+            violations.append(
+                {
+                    "relationship": rel,
+                    "source_role": source_role,
+                    "target_role": target_role,
+                    "forbidden_rule": note,
+                }
+            )
+
+    return {
+        "identity_relationships_checked": len(identity_relationships),
+        "asset_roles_resolved": asset_roles,
+        "violations": violations,
+        "unresolved_edges": unresolved_edges,
+        "not_exercised": [_STRUCTURALLY_UNREACHABLE_FORBIDDEN_EDGE],
     }
 
 
@@ -548,11 +777,34 @@ def _self_check(report: dict[str, Any], control: dict[str, Any]) -> tuple[str, b
 
 
 def main(argv: list[str]) -> int:
-    if not argv:
+    allow_missing_pki = "--allow-missing-pki" in argv
+    run_paths = [a for a in argv if a != "--allow-missing-pki"]
+
+    if not run_paths:
         print(__doc__)
         return 2
+
+    # Loud failure by default (unless --allow-missing-pki): a missing
+    # pki-lock.generated.json silently zeroes out every certificate
+    # ('artifact' surface) finding's chance of being scored, which would
+    # otherwise read as a real 0/0-recall result instead of a broken build
+    # step. Checked once, before scoring any run, rather than per-run inside
+    # the loop below, because it is the same fatal precondition for all of
+    # them.
+    if not PKI_LOCK.is_file() and not allow_missing_pki:
+        print(
+            f"FATAL: {PKI_LOCK} is missing.\n"
+            "Every certificate ('artifact' surface) finding in every run below would "
+            "silently score as out of reach instead of being resolved to a planted PKI "
+            "role, which is not a real result.\n"
+            "Run harness/build/generate-pki.sh first, or pass --allow-missing-pki to "
+            "score anyway and accept that those assets will not be scored.",
+            file=sys.stderr,
+        )
+        return 1
+
     exit_code = 0
-    for arg in argv:
+    for arg in run_paths:
         path = Path(arg)
         run = json.loads(path.read_text(encoding="utf-8"))
         report = score_run(run)
@@ -562,7 +814,8 @@ def main(argv: list[str]) -> int:
             print(
                 "    NOTE: harness/build/pki-lock.generated.json is missing, so no "
                 "certificate can be resolved to a planted role. Run "
-                "harness/build/generate-pki.sh."
+                "harness/build/generate-pki.sh (or this run was scored with "
+                "--allow-missing-pki)."
             )
         message, ok = _self_check(report, verify_metric_is_live(run))
         print(message)

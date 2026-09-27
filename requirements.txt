@@ -1,0 +1,6 @@
+# Python dependencies for harness/build and harness/eval.
+# pycryptodome: deterministic RSA key derivation in harness/build/generate_pki_keys.py
+cryptography>=44
+pycryptodome>=3.23
+PyYAML>=6.0
+pytest>=8

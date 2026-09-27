@@ -8,10 +8,13 @@ Implemented in the order the 2026-09-17 task asked for:
 4. secret_leak_scan -- Directive 10 / TRAP-09 (§8.2 "Security of ECDAT" row).
 
 Inputs are plain dicts/lists (JSON- or YAML-loadable), not tied to any
-specific ECDAT output schema yet -- no adapters exist to produce real output
-(ecdat/src/ecdat/adapters/ is still empty stubs), so this module is
-structural and exercised here only against synthetic fixtures in
-`_selftest()`. Wiring it to a real ECDAT run is future work.
+specific ECDAT output schema -- that join lives in `score_run.py`, which
+wires these functions to real `ecdat scan` run documents (see
+`harness/eval/run_ecdat.py`, which runs ecdat for real against the Tier A
+payment-gateway target and scores the result). This module's own
+`_selftest()` still only exercises synthetic fixtures, deliberately: it is
+testing these functions' contracts in isolation, not re-deriving a real
+score every time it runs.
 
 Not domain code -- harness eval tooling only.
 """
