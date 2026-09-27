@@ -67,13 +67,26 @@ SKIP_TARGET_COPY="${HARNESS_PKI_SKIP_TARGET_COPY:-0}"
 # anchor needs a periodic bump to keep pay-edge non-expired against real
 # wall-clock (e.g. for `openssl verify` / a live TLS handshake / ecdat's own
 # lifecycle read), the same way the old random-each-run script needed a
-# re-run to get a fresh 90-day window. Bump NOT_BEFORE below (and re-run this
-# script) if pay-edge's window has passed; last bumped 2026-09-26.
-NOT_BEFORE="20260901000000Z"
-ROOT_NOT_AFTER="20460901000000Z"     # +20y
-INTCA_NOT_AFTER="20360901000000Z"    # +10y
-PAYEDGE_NOT_AFTER="20261130000000Z"  # +90d
-GATEWAY_NOT_AFTER="20270901000000Z"  # +1y
+# re-run to get a fresh 90-day window.
+#
+# DO NOT HAND-EDIT THE DATES BELOW. Run `harness/build/bump-pki.sh
+# <YYYYMMDD>` instead -- it derives every date below from a single anchor
+# with the same offsets (+20y/+10y/+90d/+1y) this file has always used, then
+# re-runs this script. See bump-pki.sh's header and README.md "Deterministic
+# PKI" -> "Bumping the PKI" for the full re-record checklist that must be
+# done by hand afterwards (ecdat fixtures do not regenerate themselves).
+# `harness/build/test_pki_freshness.py` (part of `python -m pytest harness`)
+# fails loudly, with these same instructions, once pay-edge is within 30
+# days of PAYEDGE_NOT_AFTER -- that failure is the trigger to run this.
+#
+# last bumped 2026-09-27 (root/int-ca/gateway now valid past 2027-06-30;
+# pay-edge, true to its 90-day design intent, is NOT stretched to cover
+# that far -- it will need bump-pki.sh run again before ~2026-12-26).
+NOT_BEFORE="20260927000000Z"
+ROOT_NOT_AFTER="20460927000000Z"     # +20y
+INTCA_NOT_AFTER="20360927000000Z"    # +10y
+PAYEDGE_NOT_AFTER="20261226000000Z"  # +90d
+GATEWAY_NOT_AFTER="20270927000000Z"  # +1y
 
 # Fixed serials (harness §6 doesn't mandate specific values, only that
 # ground truth references roles by NAME -- these just need to stop coming
