@@ -83,6 +83,35 @@ def _dependency_run(package_name: str = "org.bouncycastle:bcprov-jdk18on") -> di
     }
 
 
+def _k8s_secret_run(path: str = "targets/infrastructure/k8s/secrets/pay-tls-secret.yaml") -> dict:
+    """Shaped like a real `ecdat scan --adapter k8s-secret` run (DEV-014):
+    `coverage.scanned` names the manifest file it read, surface
+    `k8ssecret:<path>:data.tls.key`, `contains_private_key_material: True`
+    KNOWN -- matches INF-017's ground-truth location (`key: data.tls.key`)."""
+    return {
+        "adapter_id": "k8s-secret",
+        "outcome": "completed",
+        "failure_reason": None,
+        "coverage": {"scanned": [path], "skipped": []},
+        "visibility": [],
+        "findings": [
+            {
+                "finding_id": "k8s-secret:0",
+                "surface": f"k8ssecret:{path}:data.tls.key",
+                "evidence_refs": [],
+                "fields": [
+                    _field("manifest_path", path),
+                    _field("secret_name", "pay-tls-secret"),
+                    _field("key", "tls.key"),
+                    _field("content_kind", "private_key"),
+                    _field("contains_private_key_material", True),
+                    _field("key_algorithm", "EC"),
+                ],
+            }
+        ],
+    }
+
+
 # --- _canonical_surface --------------------------------------------------
 
 
@@ -96,6 +125,7 @@ def _dependency_run(package_name: str = "org.bouncycastle:bcprov-jdk18on") -> di
         ("source", "source"),
         ("certdir:some/dir", "artifact"),
         ("config:root:some.key", "configuration"),
+        ("k8ssecret:/some/manifest.yaml:data.tls.key", "configuration"),
         ("something-unrecognised", None),
     ],
 )
@@ -178,7 +208,38 @@ def test_unplanted_package_is_unmatched_not_silently_dropped():
     labels = [u["label"] for u in report["findings_not_matched_to_a_planted_asset"]]
     assert "some.other:library" in labels
     # PAY-008 is in reach (trivy ran) but was not found -- a real miss.
-    assert report["per_surface_recall"]["dependency"] == {"found": 0, "total": 1, "recall": 0.0}
+
+
+# --- configuration surface via k8s-secret (INF-017, DEV-014) ---------------
+
+
+def test_k8s_secret_finding_matches_inf_017_by_manifest_and_key():
+    report = score_run(_k8s_secret_run())
+    recall = report["per_surface_recall"]["configuration"]
+    assert recall["found"] == 1
+    assert recall["total"] == 1
+    assert recall["recall"] == 1.0
+
+
+def test_k8s_secret_finding_with_wrong_key_is_unmatched():
+    run = _k8s_secret_run()
+    run["findings"][0]["surface"] = run["findings"][0]["surface"].replace(
+        "data.tls.key", "data.tls.crt"
+    )
+    report = score_run(run)
+    # The manifest was still reached (coverage.scanned matches), so INF-017
+    # is a real, scored miss -- not silently dropped out of the denominator.
+    assert report["per_surface_recall"]["configuration"] == {"found": 0, "total": 1, "recall": 0.0}
+    labels = [u["label"] for u in report["findings_not_matched_to_a_planted_asset"]]
+    assert "data.tls.crt" in labels
+
+
+def test_k8s_secret_out_of_reach_when_manifest_not_scanned():
+    run = _k8s_secret_run()
+    run["coverage"]["scanned"] = ["targets/infrastructure/k8s/helm/payment-gateway/values.yaml"]
+    report = score_run(run)
+    assert "INF-017" in report["surfaces_out_of_reach"].get("configuration", [])
+    assert report["matched_count"] == 0
 
 
 # --- score_correlation: forbidden-edge check over a correlate report ----

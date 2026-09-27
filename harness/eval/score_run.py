@@ -169,6 +169,8 @@ def _canonical_surface(surface: str) -> str | None:
         return "artifact"
     if surface.startswith("config:"):
         return "configuration"
+    if surface.startswith("k8ssecret:"):
+        return "configuration"
     if surface.startswith("tls:"):
         return "tls"
     if surface.startswith("packages:"):
@@ -177,12 +179,20 @@ def _canonical_surface(surface: str) -> str | None:
 
 
 def _property_key(surface: str) -> str | None:
-    """`config:<scan root>:<property key>` -> the property key.
+    """`config:<scan root>:<property key>` or `k8ssecret:<manifest
+    path>:<data/stringData key>` -> the trailing key.
 
-    The scan root is an absolute path that may itself contain a colon, so the
-    key is taken from the right-hand end, not by splitting from the left.
+    ecdat's k8s-secret adapter (DEV-014) emits `k8ssecret:<path>:<source
+    field>.<key>` (e.g. "k8ssecret:.../pay-tls-secret.yaml:data.tls.key"),
+    the same shape config-chain-spring's own `config:<root>:<property key>`
+    already uses -- both are joined here as ground truth's `configuration`
+    surface, keyed on whatever ground truth's own `key` field names (a
+    Spring property key for one adapter, "data.tls.key" for the other). The
+    scan root/manifest path is an absolute path that may itself contain a
+    colon (a Windows drive letter), so the key is taken from the right-hand
+    end, not by splitting from the left.
     """
-    if not surface.startswith("config:"):
+    if not (surface.startswith("config:") or surface.startswith("k8ssecret:")):
         return None
     tail = surface.rsplit(":", 1)[-1]
     return tail or None

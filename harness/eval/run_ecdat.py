@@ -42,6 +42,27 @@ report this script prints):
                          subprocess is involved -- python-cryptography reads
                          the file directly -- so this is unconditionally a
                          live, non-replay scan of a real artefact.
+  certs-x509-root-ca
+              (LIVE)     A SECOND certs-x509 scan, over harness/build/out/
+                         directly, so INF-001 (root-ca) is actually in reach.
+                         INF-001.yaml names two locations: the target-layout
+                         copy under targets/infrastructure/pki/ (never
+                         populated -- see the FATAL check below) and
+                         harness/build/out/root-ca/cert.pem, which is exactly
+                         where generate-pki.sh writes it (harness §6). The
+                         original single certs-x509 run above only ever
+                         pointed at the payment-gateway keystore, so root-ca
+                         (and int-ca-ecc, pay-edge, gateway-p12's own loose
+                         cert.pem/key.pem files) were never scanned by
+                         anything -- not a scoring bug, a target-scope gap.
+                         Kept as its own run (not folded into the run above)
+                         so PAY-004/PAY-005's existing keystore-scoped
+                         coverage is untouched.
+  k8s-secret  (LIVE)     Reads the real pay-tls-secret.yaml this harness's own
+                         generate-pki.sh just wrote (from its .template) under
+                         targets/infrastructure/k8s/secrets/. No external tool
+                         subprocess: ecdat's own YAML+cryptography reader runs
+                         directly against the manifest, for INF-017.
   config-chain-spring
               (LIVE)     Reads the real application.yml / application-prod.yml
                          under targets/payments/payment-gateway directly off
@@ -243,6 +264,8 @@ def main(argv: list[str] | None = None) -> int:
 
     payment_gateway = HARNESS_ROOT / "targets" / "payments" / "payment-gateway"
     keystore = payment_gateway / "keystore" / "gateway.p12"
+    pki_out = HARNESS_ROOT / "harness" / "build" / "out"
+    k8s_secrets_dir = HARNESS_ROOT / "targets" / "infrastructure" / "k8s"
     semgrep_fixture = (
         ecdat_repo
         / "tests" / "fixtures" / "recorded" / "semgrep" / "1.99.0" / "ecdat-rules"
@@ -272,6 +295,21 @@ def main(argv: list[str] | None = None) -> int:
         print(
             f"FATAL: {keystore} is missing. Run harness/build/generate-pki.sh first "
             "(it copies the real gateway.p12 into this target).",
+            file=sys.stderr,
+        )
+        return 1
+    if not (pki_out / "root-ca" / "cert.pem").is_file():
+        print(
+            f"FATAL: {pki_out / 'root-ca' / 'cert.pem'} is missing. Run "
+            "harness/build/generate-pki.sh first.",
+            file=sys.stderr,
+        )
+        return 1
+    pay_tls_secret = k8s_secrets_dir / "secrets" / "pay-tls-secret.yaml"
+    if not pay_tls_secret.is_file():
+        print(
+            f"FATAL: {pay_tls_secret} is missing. Run harness/build/generate-pki.sh first "
+            "(it renders this file from pay-tls-secret.yaml.template).",
             file=sys.stderr,
         )
         return 1
@@ -313,6 +351,22 @@ def main(argv: list[str] | None = None) -> int:
         "certs-x509",
         ["--input", str(keystore), "--keystore-password", "changeit"],
         OUT_DIR / "certs-x509.run.json",
+    )
+
+    print("\n=== certs-x509-root-ca (LIVE read of harness/build/out/, for INF-001) ===")
+    runs["certs-x509-root-ca"] = _run_ecdat_scan(
+        ecdat_repo,
+        "certs-x509",
+        ["--input", str(pki_out), "--keystore-password", "changeit"],
+        OUT_DIR / "certs-x509-root-ca.run.json",
+    )
+
+    print("\n=== k8s-secret (LIVE read of the real pay-tls-secret.yaml manifest) ===")
+    runs["k8s-secret"] = _run_ecdat_scan(
+        ecdat_repo,
+        "k8s-secret",
+        ["--input", str(k8s_secrets_dir)],
+        OUT_DIR / "k8s-secret.run.json",
     )
 
     print("\n=== config-chain-spring (LIVE resolution of pay.keywrap.transformation) ===")
@@ -382,6 +436,21 @@ def main(argv: list[str] | None = None) -> int:
                 "confidence_justification": "harness eval run_ecdat.py --combined",
                 "input": str(keystore),
                 "keystore_password": "changeit",
+            },
+            {
+                "adapter": "certs-x509",
+                "target_id": "payment-gateway:certs-x509-root-ca",
+                "confidence": 0.9,
+                "confidence_justification": "harness eval run_ecdat.py --combined",
+                "input": str(pki_out),
+                "keystore_password": "changeit",
+            },
+            {
+                "adapter": "k8s-secret",
+                "target_id": "payment-gateway:k8s-secret",
+                "confidence": 0.9,
+                "confidence_justification": "harness eval run_ecdat.py --combined",
+                "input": str(k8s_secrets_dir),
             },
             {
                 "adapter": "config-chain-spring",
