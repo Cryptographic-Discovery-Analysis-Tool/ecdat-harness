@@ -158,71 +158,89 @@ hash the raw `.p12` bytes (see `topo_x3_der_hash_equality/README.md`'s
 finding on why that canonicalization step is load-bearing, not a
 formality).
 
-## Current real results (2026-09-26, this environment)
+## Current real results (2026-09-27, this environment)
 
 Maven/Docker/semgrep/trivy/haproxy binaries are not installed on this
 Windows machine, so `source-semgrep`, `tls-endpoint` and `packages-trivy` are
 REPLAYS of real recorded tool runs against this harness's own Tier A
-targets; `certs-x509` and `config-chain-spring` are LIVE. See
-`harness/eval/experiments.md` and each fixture's own README (linked above)
-for tool-version provenance.
+targets; `certs-x509`, `certs-x509-root-ca`, `k8s-secret` and
+`config-chain-spring` are LIVE. See `harness/eval/experiments.md` and each
+fixture's own README (linked above) for tool-version provenance.
+
+`certs-x509-root-ca` and `k8s-secret` are new runs added in this session:
+`certs-x509-root-ca` re-runs the same `certs-x509` adapter over
+`harness/build/out/` directly (the original `certs-x509` run only ever
+pointed at the payment-gateway keystore, so `root-ca` was never in reach --
+a target-scope gap, not a detection gap; see `run_ecdat.py`'s own docstring
+for the full explanation). `k8s-secret` is ecdat's new generic Kubernetes
+Secret adapter (`src/ecdat/adapters/k8s_secret/`, ecdat DEV-014), reading
+the real `pay-tls-secret.yaml` this harness's own `generate-pki.sh` renders
+from its template.
 
 - **False-certainty rate: 0.0** on every run that has anything eligible to
-  score (`source-semgrep`, `certs-x509`, `config-chain-spring`: 0 of 8/2/3
-  eligible fields over-claimed). `tls-endpoint` and `packages-trivy` report
-  "not applicable" -- every field either has no stated expectation on that
-  surface (`tls`: PAY-005.yaml's own comment says why, on purpose) or is
-  itself a direct artefact read expected `KNOWN` (`dependency`) -- not a
-  broken join; each run's own metric self-check (or, for `tls`/`dependency`,
-  the "not applicable" branch itself) confirms this.
-- **Per-surface recall, now 8/8 planted PAY-0xx/TRAP-01 findings that ANY
-  adapter reaches:** `source` 4/4 (PAY-001, PAY-002, PAY-003, TRAP-01),
-  `artifact` 1/1 (PAY-004's gateway-p12 certificate), `configuration` 1/1
-  (PAY-001's `pay.keywrap.transformation`), `tls` **3/3** (PAY-005/006/007,
-  all from the one real sslyze wire probe of `edge-lb:8443`), `dependency`
-  **1/1** (PAY-008's `org.bouncycastle:bcprov-jdk18on`, from the one real
-  trivy rootfs scan of the built fat jar). Every surface an adapter did not
-  reach is still reported "out of reach", never scored as a miss.
+  score (`source-semgrep` 0/8, `certs-x509` 0/2, `certs-x509-root-ca` 0/10,
+  `config-chain-spring` 0/3). `k8s-secret`, `tls-endpoint` and
+  `packages-trivy` report "not applicable" -- every field either has no
+  stated expectation on that surface, or is itself a direct read expected
+  `KNOWN` -- not a broken join; each run's own metric self-check (or the
+  "not applicable" branch itself) confirms this.
+- **Per-surface recall, now 10/10 planted Tier A assets (PAY-001..008,
+  INF-001, INF-017) that ANY adapter reaches**, up from 8/10 before this
+  session: `source` 4/4 (PAY-001, PAY-002, PAY-003, TRAP-01), `artifact`
+  1/1 on the keystore-scoped `certs-x509` run (PAY-004's gateway-p12
+  certificate) **plus 3/3 on the new `certs-x509-root-ca` run** (PAY-004,
+  PAY-005, **INF-001's root-ca certificate** -- previously unscored because
+  nothing scanned `harness/build/out/root-ca/cert.pem`), `configuration`
+  1/1 on `config-chain-spring` (PAY-001's `pay.keywrap.transformation`)
+  **plus 1/1 on the new `k8s-secret` run (INF-017's `data.tls.key`,
+  previously unscored because no adapter read k8s Secret manifests at
+  all)**, `tls` 3/3 (PAY-005/006/007, one real sslyze wire probe of
+  `edge-lb:8443`), `dependency` 1/1 (PAY-008's
+  `org.bouncycastle:bcprov-jdk18on`, one real trivy rootfs scan of the
+  built fat jar). Every surface an adapter did not reach is still reported
+  "out of reach", never scored as a miss.
 - **Under-claiming rate: 0.0** on every run with anything expected `KNOWN`
   in scope.
 - **Forbidden-edge violations: 0, genuinely exercised.**
   `python harness/eval/run_ecdat.py --combined` runs a real `ecdat correlate`
-  over all 5 adapters above in one process: 31 assets, **0 same-object
-  relationships** (gateway-p12 and pay-edge really are different
-  certificates with different `der_sha256` hashes, so ecdat's own
-  correlation engine never links them -- there was nothing to even flag).
-  `score_run.py`'s `score_correlation` resolves 3 assets to harness PKI
-  roles (`pay-edge`, `int-ca-ecc`, `gateway-p12`) and checks
+  over all 7 adapter runs above in one process: 36 assets, 3 same-object
+  relationships (all within the `certs-x509`/`certs-x509-root-ca` PKI-role
+  family -- e.g. the same `gateway-p12`/`pay-edge`/`int-ca-ecc` certificates
+  read twice across the two certs-x509 runs; gateway-p12 and pay-edge
+  themselves remain different certificates with different `der_sha256`
+  hashes, so they are never linked to each other).
+  `score_run.py`'s `score_correlation` resolves 7 assets to harness PKI
+  roles (`pay-edge`, `int-ca-ecc`, `gateway-p12`, `root-ca`) and checks
   `ground-truth/relationships.yaml`'s forbidden `gateway-p12`/`pay-edge`
-  same-object pair against them: 0 violations. The OTHER forbidden pair
-  (PAY-001's source-code RSA key vs PAY-004's keystore key) is **not
-  exercised** -- reported as such by `score_correlation`, not silently
-  passed -- because `source-semgrep` emits no `der_sha256`/`spki_sha256`
-  field at all, so no hash exists on that side for ecdat's identity rule to
-  ever compare.
-- **Secret-leak scan:** not run against these five runs' output (none of
-  them write key bytes; every adapter's own module docstring notes findings
-  are run through the shared secret guard before being returned). Previously
-  verified for real against this harness's own generated
-  `pay-tls-secret.yaml` / `pay-edge/key.pem` (see `harness/eval/experiments.md`).
+  same-object pair against all 3 relationships: 0 violations. The OTHER
+  forbidden pair (PAY-001's source-code RSA key vs PAY-004's keystore key)
+  is **not exercised** -- reported as such by `score_correlation`, not
+  silently passed -- because `source-semgrep` emits no
+  `der_sha256`/`spki_sha256` field at all, so no hash exists on that side
+  for ecdat's identity rule to ever compare.
+- **Secret-leak scan: clean.** None of the seven runs' output writes key
+  bytes; `k8s-secret` decodes the real `pay-edge` EC private key inside
+  `pay-tls-secret.yaml` in memory and reports only
+  `contains_private_key_material: KNOWN(true)`, `key_algorithm: EC`,
+  `key_size: 256`, `key_curve: secp256r1` -- every adapter's own module
+  docstring notes findings are run through the shared secret guard
+  (`ecdat.security.secrets.scan_for_secrets`) before being returned, and
+  ecdat's own `test_k8s_secret.py` asserts the guard fires on a real key and
+  that the serialised k8s-secret result contains neither PEM armour nor the
+  base64 blob. Also previously verified manually against this harness's own
+  generated `pay-tls-secret.yaml` / `pay-edge/key.pem` (see
+  `harness/eval/experiments.md`).
 
 ### What ecdat missed, and why
 
-- **Mapping gap, not a detection gap:** `INF-017` (the k8s secret carrying
-  the reused `pay-edge` private key) is still unscored -- no ecdat adapter
-  reads a raw Kubernetes Secret manifest as its own surface, so it stays
-  "out of reach" on every run above, including the combined one. This is the
-  one remaining item from the original scope that `score_run.py`'s join
-  extension does not fix, because there is no adapter output to join in the
-  first place.
 - **Tool unavailable, not a detection gap:** `images-cbomkit-theia`,
   `hsm-pkcs11`, `kms-aws` were not run -- Docker, a PKCS#11 token and a real
   AWS account are not available here. ecdat has real adapters for all three;
   they were never invoked.
-- **Not a real gap:** every asset an adapter above actually reached was
-  found, with the correct epistemic state, zero false certainty, and (for
-  the two identity-bearing surfaces this combined run could compare) zero
-  forbidden merges.
+- **Not a real gap:** every Tier A asset an adapter above actually reached
+  was found, with the correct epistemic state, zero false certainty, and
+  (for the identity-bearing surfaces this combined run could compare) zero
+  forbidden merges. All 10 planted Tier A assets are now in reach and found.
 
 ## Layout
 
